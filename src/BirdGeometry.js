@@ -1,11 +1,43 @@
 import * as THREE from 'three';
 
+/*
+ * BirdGeometry.js
+ *
+ * Definisce la geometria visuale dei boids.
+ *
+ * Ogni boid è rappresentato da 3 triangoli:
+ * - corpo centrale;
+ * - ala sinistra;
+ * - ala destra.
+ *
+ * La geometria contiene anche:
+ * - reference: coordinate UV per leggere posizione e velocità dalla texture GPGPU;
+ * - birdVertex: indice del vertice, usato nello shader per animare le ali;
+ * - birdColor: colore del boid, assegnato in base alla specie.
+ *
+ * Le specie sono distribuite in modo il più possibile uniforme.
+ * Esempio:
+ * - 100 boids, 4 specie -> 25 boids per specie;
+ * - 100 boids, 3 specie -> circa 34, 33, 33.
+ */
+
+const SPECIES_COLORS = [
+    0x333333, // grigio scuro
+    0x1f5eff, // blu
+    0x55ccff, // azzurro
+    0x22aa44, // verde
+    0x20c997, // verdeacqua
+    0xffaa00, // arancione
+    0xaa55ff, // viola
+    0xff5577  // rosa
+];
+
 export class BirdGeometry extends THREE.BufferGeometry {
-    constructor(birds, width) {
+    constructor(boidCount, textureWidth, speciesCount) {
         super();
 
         const trianglesPerBird = 3;
-        const triangles = birds * trianglesPerBird;
+        const triangles = boidCount * trianglesPerBird;
         const points = triangles * 3;
 
         const vertices = new THREE.BufferAttribute(new Float32Array(points * 3), 3);
@@ -18,29 +50,32 @@ export class BirdGeometry extends THREE.BufferGeometry {
         this.setAttribute('reference', references);
         this.setAttribute('birdVertex', birdVertex);
 
-        let v = 0;
+        let vertexArrayIndex = 0;
 
         function vertsPush(...values) {
             for (let i = 0; i < values.length; i++) {
-                vertices.array[v++] = values[i];
+                vertices.array[vertexArrayIndex++] = values[i];
             }
         }
 
         const wingsSpan = 20;
 
-        for (let f = 0; f < birds; f++) {
+        for (let i = 0; i < boidCount; i++) {
+            // Corpo
             vertsPush(
                 0, 0, -20,
                 0, 4, -20,
                 0, 0, 30
             );
 
+            // Ala sinistra
             vertsPush(
                 0, 0, -15,
                 -wingsSpan, 0, 0,
                 0, 0, 15
             );
 
+            // Ala destra
             vertsPush(
                 0, 0, 15,
                 wingsSpan, 0, 0,
@@ -49,21 +84,25 @@ export class BirdGeometry extends THREE.BufferGeometry {
         }
 
         for (let v = 0; v < triangles * 3; v++) {
-            const triangleIndex = ~~(v / 3);
-            const birdIndex = ~~(triangleIndex / trianglesPerBird);
-            const x = (birdIndex % width) / width;
-            const y = ~~(birdIndex / width) / width;
+            const triangleIndex = Math.floor(v / 3);
+            const birdIndex = Math.floor(triangleIndex / trianglesPerBird);
 
-            const c = new THREE.Color(
-                0x666666 +
-                ~~(v / 9) / birds * 0x666666
-            );
+            /*
+             * Coordinate UV nella texture GPGPU.
+             * Ogni boid corrisponde a un pixel della texture.
+             * Usiamo + 0.5 per puntare al centro del pixel.
+             */
+            const x = ((birdIndex % textureWidth) + 0.5) / textureWidth;
+            const y = (Math.floor(birdIndex / textureWidth) + 0.5) / textureWidth;
 
-            birdColors.array[v * 3 + 0] = c.r;
-            birdColors.array[v * 3 + 1] = c.g;
-            birdColors.array[v * 3 + 2] = c.b;
+            const speciesIndex = Math.floor(birdIndex * speciesCount / boidCount);
+            const color = new THREE.Color(SPECIES_COLORS[speciesIndex % SPECIES_COLORS.length]);
 
-            references.array[v * 2] = x;
+            birdColors.array[v * 3 + 0] = color.r;
+            birdColors.array[v * 3 + 1] = color.g;
+            birdColors.array[v * 3 + 2] = color.b;
+
+            references.array[v * 2 + 0] = x;
             references.array[v * 2 + 1] = y;
 
             birdVertex.array[v] = v % 9;

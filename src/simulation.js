@@ -4,12 +4,33 @@ import { GPUComputationRenderer } from 'three/addons/misc/GPUComputationRenderer
 import fragmentShaderPosition from './shaders/fragmentShaderPosition.glsl?raw';
 import fragmentShaderVelocity from './shaders/fragmentShaderVelocity.glsl?raw';
 
+/*
+ * simulation.js
+ *
+ * Gestisce la simulazione GPGPU dei boids.
+ *
+ * Le posizioni e le velocità non sono salvate in array JavaScript,
+ * ma in texture GPU:
+ *
+ * - texturePosition: posizione x, y, z e fase delle ali;
+ * - textureVelocity: velocità x, y, z.
+ *
+ * Ogni pixel della texture rappresenta un boid.
+ *
+ * Il numero di boids può essere modificato dalla GUI.
+ * Quando cambia, la simulazione deve essere ricostruita.
+ */
+
 export class BoidsSimulation {
-    constructor(renderer, width, bounds) {
+    constructor(renderer, boidCount, speciesCount, bounds) {
         this.renderer = renderer;
-        this.width = width;
+        this.boidCount = boidCount;
+        this.speciesCount = speciesCount;
         this.bounds = bounds;
         this.boundsHalf = bounds / 2;
+
+        this.textureWidth = Math.ceil(Math.sqrt(boidCount));
+        this.textureSize = this.textureWidth * this.textureWidth;
 
         this.gpuCompute = null;
         this.positionVariable = null;
@@ -21,7 +42,11 @@ export class BoidsSimulation {
     }
 
     init() {
-        this.gpuCompute = new GPUComputationRenderer(this.width, this.width, this.renderer);
+        this.gpuCompute = new GPUComputationRenderer(
+            this.textureWidth,
+            this.textureWidth,
+            this.renderer
+        );
 
         const dtPosition = this.gpuCompute.createTexture();
         const dtVelocity = this.gpuCompute.createTexture();
@@ -58,13 +83,23 @@ export class BoidsSimulation {
         this.positionUniforms.delta = { value: 0.0 };
 
         this.velocityUniforms.time = { value: 1.0 };
-        this.velocityUniforms.delta = { value: 0.0 };
         this.velocityUniforms.testing = { value: 1.0 };
+        this.velocityUniforms.delta = { value: 0.0 };
+
         this.velocityUniforms.separationDistance = { value: 1.0 };
         this.velocityUniforms.alignmentDistance = { value: 1.0 };
         this.velocityUniforms.cohesionDistance = { value: 1.0 };
         this.velocityUniforms.freedomFactor = { value: 1.0 };
+
         this.velocityUniforms.predator = { value: new THREE.Vector3() };
+
+        /*
+         * Nuove uniform:
+         * - boidCount serve a ignorare eventuali pixel non usati;
+         * - speciesCount serve a calcolare la specie di ogni boid nello shader.
+         */
+        this.velocityUniforms.boidCount = { value: this.boidCount };
+        this.velocityUniforms.speciesCount = { value: this.speciesCount };
 
         this.velocityVariable.material.defines.BOUNDS = this.bounds.toFixed(2);
 
@@ -83,22 +118,40 @@ export class BoidsSimulation {
     fillPositionTexture(texture) {
         const array = texture.image.data;
 
-        for (let k = 0, kl = array.length; k < kl; k += 4) {
-            array[k + 0] = Math.random() * this.bounds - this.boundsHalf;
-            array[k + 1] = Math.random() * this.bounds - this.boundsHalf;
-            array[k + 2] = Math.random() * this.bounds - this.boundsHalf;
-            array[k + 3] = 1;
+        for (let k = 0, i = 0; k < array.length; k += 4, i++) {
+            if (i < this.boidCount) {
+                array[k + 0] = Math.random() * this.bounds - this.boundsHalf;
+                array[k + 1] = Math.random() * this.bounds - this.boundsHalf;
+                array[k + 2] = Math.random() * this.bounds - this.boundsHalf;
+                array[k + 3] = 1;
+            } else {
+                /*
+                 * Slot non usati.
+                 * Esistono solo perché la texture deve essere quadrata.
+                 */
+                array[k + 0] = 0;
+                array[k + 1] = 0;
+                array[k + 2] = 0;
+                array[k + 3] = 1;
+            }
         }
     }
 
     fillVelocityTexture(texture) {
         const array = texture.image.data;
 
-        for (let k = 0, kl = array.length; k < kl; k += 4) {
-            array[k + 0] = (Math.random() - 0.5) * 10;
-            array[k + 1] = (Math.random() - 0.5) * 10;
-            array[k + 2] = (Math.random() - 0.5) * 10;
-            array[k + 3] = 1;
+        for (let k = 0, i = 0; k < array.length; k += 4, i++) {
+            if (i < this.boidCount) {
+                array[k + 0] = (Math.random() - 0.5) * 10;
+                array[k + 1] = (Math.random() - 0.5) * 10;
+                array[k + 2] = (Math.random() - 0.5) * 10;
+                array[k + 3] = 1;
+            } else {
+                array[k + 0] = 0;
+                array[k + 1] = 0;
+                array[k + 2] = 0;
+                array[k + 3] = 1;
+            }
         }
     }
 
@@ -126,5 +179,19 @@ export class BoidsSimulation {
 
     getVelocityTexture() {
         return this.gpuCompute.getCurrentRenderTarget(this.velocityVariable).texture;
+    }
+
+    getTextureWidth() {
+        return this.textureWidth;
+    }
+
+    dispose() {
+        /*
+         * GPUComputationRenderer nelle versioni recenti di Three.js espone dispose().
+         * Il controllo evita errori se la funzione non fosse disponibile.
+         */
+        if (this.gpuCompute && typeof this.gpuCompute.dispose === 'function') {
+            this.gpuCompute.dispose();
+        }
     }
 }

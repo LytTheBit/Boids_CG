@@ -3,16 +3,17 @@
  *
  * Fragment shader per il colore finale dei boids.
  *
- * Riceve dal vertex shader:
- * - vColor: colore associato ai vertici del boid;
- * - z: profondità del vertice nello spazio 3D.
+ * Il colore arriva da BirdGeometry.js tramite l'attributo birdColor.
+ * Ogni specie riceve un colore diverso:
+ * - grigio scuro;
+ * - blu;
+ * - azzurro;
+ * - verde;
+ * - verdeacqua;
+ * - ecc.
  *
- * In questa versione il colore è volutamente semplice:
- * viene calcolata una tonalità di grigio in base alla profondità.
- *
- * Questo è uno dei punti più facili da modificare se vuoi migliorare
- * l'aspetto visivo dei boids, ad esempio introducendo colori diversi,
- * shading più realistico o variazioni per gruppi di boids.
+ * Viene applicato anche un semplice fattore di profondità,
+ * così i boids più lontani risultano leggermente meno luminosi.
  */
 
 varying vec4 vColor;
@@ -21,8 +22,10 @@ varying float z;
 uniform vec3 color;
 
 void main() {
+    float depthFactor = 0.4 + (1000.0 - z) / 1000.0 * 0.6;
+    depthFactor = clamp(depthFactor, 0.25, 1.0);
 
-    float z2 = 0.2 + (1000.0 - z) / 1000.0 * vColor.x;
+    vec3 finalColor = vColor.rgb * depthFactor;
 
-    gl_FragColor = vec4(z2, z2, z2, 1.0);
+    gl_FragColor = vec4(finalColor, 1.0);
 }

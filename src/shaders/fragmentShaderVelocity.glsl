@@ -4,37 +4,32 @@
  * Shader GPGPU per aggiornare la velocità dei boids.
  *
  * Ogni pixel della texture rappresenta un boid.
- * Per ogni boid, lo shader confronta la sua posizione con quella
- * di tutti gli altri boids leggendo texturePosition e textureVelocity.
  *
- * Implementa le regole classiche del modello Boids:
+ * Regole:
+ * - Separation: applicata tra tutti i boids.
+ * - Alignment: applicata tra tutti i boids.
+ * - Cohesion: applicata solo tra boids della stessa specie.
  *
- * 1. Separation:
- *    evita che i boids siano troppo vicini.
+ * Le specie sono calcolate a partire dall'indice del boid:
  *
- * 2. Alignment:
- *    tende ad allineare la direzione di volo con i vicini.
+ * speciesIndex = floor(birdIndex * speciesCount / boidCount)
  *
- * 3. Cohesion:
- *    tende ad avvicinare il boid al gruppo.
- *
- * Inoltre:
- * - il mouse viene interpretato come predatore;
- * - i boids vengono leggermente richiamati verso il centro della scena;
- * - viene applicato un limite massimo alla velocità.
- *
- * Il risultato viene scritto in gl_FragColor, cioè nella nuova texture
- * di velocità usata al frame successivo.
+ * In questo modo i boids sono divisi in modo uniforme tra le specie.
  */
 
 uniform float time;
 uniform float testing;
 uniform float delta;
+
 uniform float separationDistance;
 uniform float alignmentDistance;
 uniform float cohesionDistance;
 uniform float freedomFactor;
+
 uniform vec3 predator;
+
+uniform float boidCount;
+uniform float speciesCount;
 
 const float width = resolution.x;
 const float height = resolution.y;
@@ -57,6 +52,15 @@ float rand(vec2 co) {
     return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
+float getBirdIndex(vec2 uv) {
+    vec2 pixel = floor(uv * resolution.xy);
+    return pixel.y * resolution.x + pixel.x;
+}
+
+float getSpecies(float birdIndex) {
+    return floor(birdIndex * speciesCount / boidCount);
+}
+
 void main() {
 
     zoneRadius = separationDistance + alignmentDistance + cohesionDistance;
@@ -65,6 +69,15 @@ void main() {
     zoneRadiusSquared = zoneRadius * zoneRadius;
 
     vec2 uv = gl_FragCoord.xy / resolution.xy;
+
+    float selfIndex = getBirdIndex(uv);
+
+    if (selfIndex >= boidCount) {
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+
+    float selfSpecies = getSpecies(selfIndex);
 
     vec3 birdPosition;
     vec3 birdVelocity;
@@ -76,19 +89,15 @@ void main() {
     vec3 dir;
     float distSquared;
 
-    float separationSquared = separationDistance * separationDistance;
-    float cohesionSquared = cohesionDistance * cohesionDistance;
-
     float f;
     float percent;
 
     vec3 velocity = selfVelocity;
-
     float limit = SPEED_LIMIT;
 
     /*
      * Fuga dal predatore.
-     * Il predatore è controllato dal mouse e viene passato come uniform.
+     * Il predatore è controllato dal mouse.
      */
     dir = predator * UPPER_BOUNDS - selfPosition;
     dir.z = 0.0;
@@ -106,8 +115,7 @@ void main() {
     }
 
     /*
-     * Attrazione verso il centro.
-     * Evita che lo stormo si disperda indefinitamente nello spazio.
+     * Richiamo verso il centro della scena.
      */
     vec3 central = vec3(0.0, 0.0, 0.0);
 
@@ -115,17 +123,22 @@ void main() {
     dist = length(dir);
 
     dir.y *= 2.5;
-    velocity -= normalize(dir) * delta * 5.0;
+
+    if (dist > 0.0001) {
+        velocity -= normalize(dir) * delta * 5.0;
+    }
 
     /*
-     * Ciclo su tutti gli altri boids.
-     * Ogni boid legge posizione e velocità degli altri dalla texture.
-     *
-     * Nota: questa è una logica O(N^2), ma viene eseguita parallelamente
-     * sulla GPU: ogni frammento calcola un boid diverso.
+     * Confronto con tutti gli altri boids.
+     * I pixel oltre boidCount vengono ignorati.
      */
     for (float y = 0.0; y < height; y++) {
         for (float x = 0.0; x < width; x++) {
+
+            float otherIndex = y * width + x;
+
+            if (otherIndex >= boidCount) continue;
+            if (otherIndex == selfIndex) continue;
 
             vec2 ref = vec2(x + 0.5, y + 0.5) / resolution.xy;
 
@@ -142,11 +155,14 @@ void main() {
 
             percent = distSquared / zoneRadiusSquared;
 
+            float otherSpecies = getSpecies(otherIndex);
+            bool sameSpecies = selfSpecies == otherSpecies;
+
             if (percent < separationThresh) {
 
                 /*
                  * Separation:
-                 * se un vicino è troppo vicino, il boid si allontana.
+                 * vale anche tra specie diverse.
                  */
                 f = (separationThresh / percent - 1.0) * delta;
                 velocity -= normalize(dir) * f;
@@ -155,7 +171,7 @@ void main() {
 
                 /*
                  * Alignment:
-                 * il boid tende a orientarsi come i vicini.
+                 * vale anche tra specie diverse.
                  */
                 float threshDelta = alignmentThresh - separationThresh;
                 float adjustedPercent = (percent - separationThresh) / threshDelta;
@@ -169,20 +185,22 @@ void main() {
 
                 /*
                  * Cohesion:
-                 * il boid tende ad avvicinarsi ai vicini più lontani,
-                 * mantenendo compatto lo stormo.
+                 * viene applicata solo se i due boids appartengono
+                 * alla stessa specie.
                  */
-                float threshDelta = 1.0 - alignmentThresh;
-                float adjustedPercent;
+                if (sameSpecies) {
+                    float threshDelta = 1.0 - alignmentThresh;
+                    float adjustedPercent;
 
-                if (threshDelta == 0.0) {
-                    adjustedPercent = 1.0;
-                } else {
-                    adjustedPercent = (percent - alignmentThresh) / threshDelta;
+                    if (threshDelta == 0.0) {
+                        adjustedPercent = 1.0;
+                    } else {
+                        adjustedPercent = (percent - alignmentThresh) / threshDelta;
+                    }
+
+                    f = (0.5 - (cos(adjustedPercent * PI_2) * -0.5 + 0.5)) * delta;
+                    velocity += normalize(dir) * f;
                 }
-
-                f = (0.5 - (cos(adjustedPercent * PI_2) * -0.5 + 0.5)) * delta;
-                velocity += normalize(dir) * f;
             }
         }
     }

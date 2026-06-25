@@ -10,16 +10,41 @@ import { BoidsSimulation } from './simulation.js';
 import birdVertexShader from './shaders/birdVertex.glsl?raw';
 import birdFragmentShader from './shaders/birdFragment.glsl?raw';
 
-const WIDTH = 32;
-const BIRDS = WIDTH * WIDTH;
+/*
+ * index.js
+ *
+ * File principale dell'applicazione.
+ *
+ * Responsabilità:
+ * - crea scena, camera e renderer Three.js;
+ * - crea la simulazione GPGPU;
+ * - crea la geometria dei boids;
+ * - gestisce GUI, resize, mouse e animation loop.
+ *
+ * Migliorie aggiunte:
+ * - numero di boids modificabile dalla GUI;
+ * - numero di specie modificabile dalla GUI;
+ * - colori diversi per specie;
+ * - coesione solo tra boids della stessa specie.
+ */
 
 const BOUNDS = 800;
+
+const settings = {
+    boids: 1024,
+    species: 1,
+    separation: 20.0,
+    alignment: 20.0,
+    cohesion: 20.0,
+    freedom: 0.75
+};
 
 let container;
 let stats;
 let camera;
 let scene;
 let renderer;
+let gui;
 
 let mouseX = 0;
 let mouseY = 0;
@@ -31,6 +56,7 @@ let last = performance.now();
 
 let simulation;
 let birdUniforms;
+let birdMesh;
 
 init();
 
@@ -57,8 +83,6 @@ function init() {
 
     container.appendChild(renderer.domElement);
 
-    simulation = new BoidsSimulation(renderer, WIDTH, BOUNDS);
-
     stats = new Stats();
     container.appendChild(stats.dom);
 
@@ -68,34 +92,110 @@ function init() {
     window.addEventListener('resize', onWindowResize);
 
     initGui();
-    initBirds();
+    rebuildSimulation();
 }
 
 function initGui() {
-    const gui = new GUI();
+    gui = new GUI();
 
-    const effectController = {
-        separation: 20.0,
-        alignment: 20.0,
-        cohesion: 20.0,
-        freedom: 0.75
-    };
+    /*
+     * Parametri strutturali.
+     * Richiedono la ricostruzione della simulazione.
+     */
+    gui.add(settings, 'boids', 100, 4096, 1)
+        .name('Boids')
+        .onFinishChange(() => {
+            settings.boids = Math.floor(settings.boids);
+            rebuildSimulation();
+        });
 
-    const updateSimulationParameters = () => {
-        simulation.setBoidsParameters(effectController);
-    };
+    gui.add(settings, 'species', 1, 8, 1)
+        .name('Species')
+        .onFinishChange(() => {
+            settings.species = Math.floor(settings.species);
+            rebuildSimulation();
+        });
 
-    updateSimulationParameters();
+    /*
+     * Parametri comportamentali.
+     * Non richiedono ricostruzione: aggiornano solo le uniform.
+     */
+    gui.add(settings, 'separation', 0.0, 100.0, 1.0)
+        .name('Separation')
+        .onChange(updateSimulationParameters);
 
-    gui.add(effectController, 'separation', 0.0, 100.0, 1.0).onChange(updateSimulationParameters);
-    gui.add(effectController, 'alignment', 0.0, 100.0, 0.001).onChange(updateSimulationParameters);
-    gui.add(effectController, 'cohesion', 0.0, 100.0, 0.025).onChange(updateSimulationParameters);
+    gui.add(settings, 'alignment', 0.0, 100.0, 0.001)
+        .name('Alignment')
+        .onChange(updateSimulationParameters);
+
+    gui.add(settings, 'cohesion', 0.0, 100.0, 0.025)
+        .name('Cohesion')
+        .onChange(updateSimulationParameters);
+
+    gui.add(settings, 'freedom', 0.0, 1.0, 0.01)
+        .name('Freedom')
+        .onChange(updateSimulationParameters);
 
     gui.close();
 }
 
+function rebuildSimulation() {
+    /*
+     * Rimozione della vecchia mesh dalla scena.
+     */
+    if (birdMesh) {
+        scene.remove(birdMesh);
+
+        if (birdMesh.geometry) {
+            birdMesh.geometry.dispose();
+        }
+
+        if (birdMesh.material) {
+            birdMesh.material.dispose();
+        }
+
+        birdMesh = null;
+    }
+
+    /*
+     * Rimozione della vecchia simulazione GPGPU, se presente.
+     */
+    if (simulation) {
+        simulation.dispose();
+        simulation = null;
+    }
+
+    /*
+     * Ricostruzione della simulazione con i nuovi parametri.
+     */
+    simulation = new BoidsSimulation(
+        renderer,
+        settings.boids,
+        settings.species,
+        BOUNDS
+    );
+
+    initBirds();
+    updateSimulationParameters();
+}
+
+function updateSimulationParameters() {
+    if (!simulation) return;
+
+    simulation.setBoidsParameters({
+        separation: settings.separation,
+        alignment: settings.alignment,
+        cohesion: settings.cohesion,
+        freedom: settings.freedom
+    });
+}
+
 function initBirds() {
-    const geometry = new BirdGeometry(BIRDS, WIDTH);
+    const geometry = new BirdGeometry(
+        settings.boids,
+        simulation.getTextureWidth(),
+        settings.species
+    );
 
     birdUniforms = {
         color: { value: new THREE.Color(0xff2200) },
@@ -112,7 +212,7 @@ function initBirds() {
         side: THREE.DoubleSide
     });
 
-    const birdMesh = new THREE.Mesh(geometry, material);
+    birdMesh = new THREE.Mesh(geometry, material);
     birdMesh.rotation.y = Math.PI / 2;
     birdMesh.matrixAutoUpdate = false;
     birdMesh.updateMatrix();
@@ -139,10 +239,15 @@ function onPointerMove(event) {
 
 function animate() {
     render();
-    stats.update();
+
+    if (stats) {
+        stats.update();
+    }
 }
 
 function render() {
+    if (!simulation || !birdUniforms) return;
+
     const now = performance.now();
     let delta = (now - last) / 1000;
 
