@@ -15,7 +15,6 @@
  */
 
 attribute vec2 reference;
-attribute float birdVertex;
 attribute vec3 birdColor;
 
 uniform sampler2D texturePosition;
@@ -36,13 +35,35 @@ void main() {
     vec3 newPosition = position;
 
     /*
-     * Animazione delle ali.
-     * Alcuni vertici specifici vengono spostati lungo l'asse Y
-     * per simulare il battito.
+     * Animazione delle ali: piegatura rigida lungo l'asse del corpo (x=0),
+     * come chiudere/aprire un libro lungo la costola.
+     *
+     * Ogni vertice delle ali ruota attorno all'asse z (l'asse del corpo)
+     * in base alla propria distanza dal cardine (position.x). I vertici
+     * sul cardine hanno x=0 e quindi restano fermi per costruzione: non
+     * c'è nessuno spostamento "a mano" di vertici specifici.
+     *
+     * foldAngle oscilla tra 0 (ali completamente aperte, piatte) e
+     * maxFoldAngle (ali quasi chiuse verso l'alto): usiamo
+     * 0.5 + 0.5*sin(...) invece di sin(...) puro perché le ali di una
+     * farfalla si piegano sempre nella stessa direzione (verso l'alto),
+     * non specularmente sopra e sotto il corpo.
+     *
+     * Usiamo abs(position.x) per l'altezza (newPosition.y) così le ali
+     * sinistra e destra si piegano nella STESSA direzione (verso l'alto),
+     * come un libro che si chiude, invece di ruotare una in avanti e
+     * l'altra all'indietro. La coordinata z non viene mai toccata: ogni
+     * punto resta esattamente alla sua profondità lungo il corpo, cioè
+     * "in posizione" lungo la linea di piega.
      */
-    if (birdVertex == 4.0 || birdVertex == 7.0) {
-        newPosition.y = sin(tmpPos.w) * 5.0;
-    }
+    float maxFoldAngle = radians(75.0);
+    float foldAngle = maxFoldAngle * (0.5 + 0.5 * sin(tmpPos.w));
+
+    float foldSin = sin(foldAngle);
+    float foldCos = cos(foldAngle);
+
+    newPosition.y = abs(position.x) * foldSin;
+    newPosition.x = position.x * foldCos;
 
     newPosition = mat3(modelMatrix) * newPosition;
 

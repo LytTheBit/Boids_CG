@@ -5,10 +5,20 @@
  *
  * Ogni pixel della texture rappresenta un boid.
  *
- * Regole:
- * - Separation: applicata tra tutti i boids.
- * - Alignment: applicata tra tutti i boids.
- * - Cohesion: applicata solo tra boids della stessa specie.
+ * Regole multi-specie:
+ *
+ * - Separation:
+ *   applicata tra tutti i boids, anche di specie diverse.
+ *   Serve a evitare sovrapposizioni e collisioni visive.
+ *
+ * - Alignment:
+ *   applicata solo tra boids della stessa specie.
+ *   Serve a far sì che ogni specie sviluppi una propria direzione
+ *   collettiva.
+ *
+ * - Cohesion:
+ *   applicata solo tra boids della stessa specie.
+ *   Serve a far sì che ogni specie formi un proprio stormo.
  *
  * Le specie sono calcolate a partire dall'indice del boid:
  *
@@ -24,7 +34,6 @@ uniform float delta;
 uniform float separationDistance;
 uniform float alignmentDistance;
 uniform float cohesionDistance;
-uniform float freedomFactor;
 
 uniform vec3 predator;
 
@@ -162,7 +171,7 @@ void main() {
 
                 /*
                  * Separation:
-                 * vale anche tra specie diverse.
+                 * applicata anche tra specie diverse.
                  */
                 f = (separationThresh / percent - 1.0) * delta;
                 velocity -= normalize(dir) * f;
@@ -171,22 +180,26 @@ void main() {
 
                 /*
                  * Alignment:
-                 * vale anche tra specie diverse.
+                 * applicato solo tra boids della stessa specie.
+                 *
+                 * Se l'allineamento resta globale, specie diverse
+                 * continuano a orientarsi insieme e tendono a mescolarsi.
                  */
-                float threshDelta = alignmentThresh - separationThresh;
-                float adjustedPercent = (percent - separationThresh) / threshDelta;
+                if (sameSpecies) {
+                    float threshDelta = alignmentThresh - separationThresh;
+                    float adjustedPercent = (percent - separationThresh) / threshDelta;
 
-                birdVelocity = texture2D(textureVelocity, ref).xyz;
+                    birdVelocity = texture2D(textureVelocity, ref).xyz;
 
-                f = (0.5 - cos(adjustedPercent * PI_2) * 0.5 + 0.5) * delta;
-                velocity += normalize(birdVelocity) * f;
+                    f = (0.5 - cos(adjustedPercent * PI_2) * 0.5 + 0.5) * delta;
+                    velocity += normalize(birdVelocity) * f;
+                }
 
             } else {
 
                 /*
                  * Cohesion:
-                 * viene applicata solo se i due boids appartengono
-                 * alla stessa specie.
+                 * applicata solo tra boids della stessa specie.
                  */
                 if (sameSpecies) {
                     float threshDelta = 1.0 - alignmentThresh;

@@ -35,8 +35,7 @@ const settings = {
     species: 1,
     separation: 20.0,
     alignment: 20.0,
-    cohesion: 20.0,
-    freedom: 0.75
+    cohesion: 20.0
 };
 
 let container;
@@ -132,10 +131,6 @@ function initGui() {
         .name('Cohesion')
         .onChange(updateSimulationParameters);
 
-    gui.add(settings, 'freedom', 0.0, 1.0, 0.01)
-        .name('Freedom')
-        .onChange(updateSimulationParameters);
-
     gui.close();
 }
 
@@ -186,7 +181,6 @@ function updateSimulationParameters() {
         separation: settings.separation,
         alignment: settings.alignment,
         cohesion: settings.cohesion,
-        freedom: settings.freedom
     });
 }
 
