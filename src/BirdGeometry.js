@@ -96,8 +96,7 @@ export class BirdGeometry extends THREE.BufferGeometry {
          * su un colore già desaturato (es. il grigio 0x333333 usato di
          * default quando c'è una sola specie), ruotare la tonalità non ha
          * alcun effetto visibile se non si varia anche la saturazione.
-        */
-
+         */
         const boidColors = new Array(boidCount);
         for (let i = 0; i < boidCount; i++) {
             const speciesIndex = Math.floor(i * speciesCount / boidCount);
