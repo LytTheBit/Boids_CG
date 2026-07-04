@@ -36,14 +36,14 @@ import * as THREE from 'three';
  */
 
 const SPECIES_COLORS = [
-    0x333333, // grigio scuro
-    0x1f5eff, // blu
-    0x55ccff, // azzurro
-    0x22aa44, // verde
-    0x20c997, // verdeacqua
-    0xffaa00, // arancione
-    0xaa55ff, // viola
-    0xff5577  // rosa
+    0xe53935, // rosso
+    0xfdd835, // giallo
+    0x1e88e5, // blu
+    0x43a047, // verde
+    0x8e24aa, // viola
+    0xfb8c00, // arancione
+    0xec407a, // rosa
+    0x8d6e63  // marrone
 ];
 
 export class BirdGeometry extends THREE.BufferGeometry {
@@ -87,11 +87,17 @@ export class BirdGeometry extends THREE.BufferGeometry {
 
         /*
          * Precalcoliamo un colore per ogni singolo boid partendo dal colore
-         * della sua specie, con una leggera variazione casuale di tonalità
-         * e luminosità (spazio HSL). La variazione è puramente estetica:
-         * la specie di appartenenza (e quindi le regole di interazione nella
-         * simulazione GPGPU) resta invariata.
-         */
+         * della sua specie, con una leggera variazione casuale di tonalità,
+         * saturazione e luminosità (spazio HSL). La variazione è puramente
+         * estetica: la specie di appartenenza (e quindi le regole di
+         * interazione nella simulazione GPGPU) resta invariata.
+         *
+         * Il jitter di saturazione è importante quanto quello di tonalità:
+         * su un colore già desaturato (es. il grigio 0x333333 usato di
+         * default quando c'è una sola specie), ruotare la tonalità non ha
+         * alcun effetto visibile se non si varia anche la saturazione.
+        */
+
         const boidColors = new Array(boidCount);
         for (let i = 0; i < boidCount; i++) {
             const speciesIndex = Math.floor(i * speciesCount / boidCount);
@@ -100,14 +106,15 @@ export class BirdGeometry extends THREE.BufferGeometry {
             const hsl = { h: 0, s: 0, l: 0 };
             baseColor.getHSL(hsl);
 
-            const hueJitter = (Math.random() - 0.5) * 0.03;   // ±1.5% di tonalità
-            const lightJitter = (Math.random() - 0.5) * 0.18; // ±9% di luminosità
+            const hueJitter = (Math.random() - 0.5) * 0.08;   // ±4% di tonalità
+            const satJitter = (Math.random() - 0.5) * 0.5;    // ±25% di saturazione
+            const lightJitter = (Math.random() - 0.5) * 0.36; // ±18% di luminosità
 
             const color = new THREE.Color();
             color.setHSL(
                 THREE.MathUtils.euclideanModulo(hsl.h + hueJitter, 1),
-                hsl.s,
-                THREE.MathUtils.clamp(hsl.l + lightJitter, 0.12, 0.88)
+                THREE.MathUtils.clamp(hsl.s + satJitter, 0.0, 1.0),
+                THREE.MathUtils.clamp(hsl.l + lightJitter, 0.15, 0.85)
             );
 
             boidColors[i] = color;
