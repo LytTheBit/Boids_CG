@@ -6,6 +6,7 @@ import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
 import { BirdGeometry } from './BirdGeometry.js';
 import { BoidsSimulation } from './simulation.js';
+import { Sky } from 'three/addons/objects/Sky.js';
 
 import birdVertexShader from './shaders/birdVertex.glsl?raw';
 import birdFragmentShader from './shaders/birdFragment.glsl?raw';
@@ -25,7 +26,8 @@ import birdFragmentShader from './shaders/birdFragment.glsl?raw';
  * - numero di boids modificabile dalla GUI;
  * - numero di specie modificabile dalla GUI;
  * - colori diversi per specie;
- * - coesione solo tra boids della stessa specie.
+ * - coesione solo tra boids della stessa specie;
+ * - cielo procedurale (modello di Preetham) al posto dello sfondo bianco.
  */
 
 const BOUNDS = 800;
@@ -36,7 +38,11 @@ const settings = {
     separation: 20.0,
     alignment: 20.0,
     cohesion: 20.0,
-    centered: 5.0 // valore di default = comportamento precedente (era fisso nello shader)
+    centered: 5.0, // valore di default = comportamento precedente (era fisso nello shader)
+    skyElevation: 8,
+    skyAzimuth: 180,
+    skyTurbidity: 6,
+    skyRayleigh: 2
 };
 
 let container;
@@ -58,6 +64,9 @@ let simulation;
 let birdUniforms;
 let birdMesh;
 
+let sky;
+const sun = new THREE.Vector3();
+
 init();
 
 function init() {
@@ -68,18 +77,19 @@ function init() {
         75,
         window.innerWidth / window.innerHeight,
         1,
-        3000
+        20000
     );
     camera.position.z = 350;
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xffffff);
-    scene.fog = new THREE.Fog(0xffffff, 100, 1000);
+    scene.fog = new THREE.Fog(0xd6e6f5, 200, 1600);
 
     renderer = new THREE.WebGLRenderer();
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setAnimationLoop(animate);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.6;
 
     container.appendChild(renderer.domElement);
 
@@ -91,8 +101,40 @@ function init() {
 
     window.addEventListener('resize', onWindowResize);
 
+    initSky();
     initGui();
     rebuildSimulation();
+}
+
+function initSky() {
+    /*
+     * Cielo procedurale (modello di Preetham), sostituisce lo sfondo
+     * bianco piatto. È una "cupola" enorme (BoxGeometry con BackSide)
+     * centrata sulla camera concettualmente all'infinito: la scaliamo
+     * molto più grande della scena dei boid (BOUNDS = 800) e ben dentro
+     * il far plane della camera (20000), così resta sempre visibile
+     * dietro tutto il resto senza clipping.
+     */
+    sky = new Sky();
+    sky.scale.setScalar(10000);
+    scene.add(sky);
+
+    const uniforms = sky.material.uniforms;
+    uniforms['turbidity'].value = settings.skyTurbidity;
+    uniforms['rayleigh'].value = settings.skyRayleigh;
+    uniforms['mieCoefficient'].value = 0.005;
+    uniforms['mieDirectionalG'].value = 0.8;
+
+    updateSun();
+}
+
+function updateSun() {
+    const phi = THREE.MathUtils.degToRad(90 - settings.skyElevation);
+    const theta = THREE.MathUtils.degToRad(settings.skyAzimuth);
+
+    sun.setFromSphericalCoords(1, phi, theta);
+
+    sky.material.uniforms['sunPosition'].value.copy(sun);
 }
 
 function initGui() {
@@ -135,6 +177,33 @@ function initGui() {
     gui.add(settings, 'centered', 0.0, 20.0, 0.5)
         .name('Centered')
         .onChange(updateSimulationParameters);
+
+    /*
+     * Parametri del cielo.
+     * Non richiedono ricostruzione della simulazione, agiscono solo
+     * sulle uniform dello shader del cielo.
+     */
+    const skyFolder = gui.addFolder('Sky');
+
+    skyFolder.add(settings, 'skyElevation', 0.0, 90.0, 1.0)
+        .name('Sun Elevation')
+        .onChange(updateSun);
+
+    skyFolder.add(settings, 'skyAzimuth', 0.0, 360.0, 1.0)
+        .name('Sun Azimuth')
+        .onChange(updateSun);
+
+    skyFolder.add(settings, 'skyTurbidity', 0.0, 20.0, 0.1)
+        .name('Turbidity')
+        .onChange((value) => {
+            sky.material.uniforms['turbidity'].value = value;
+        });
+
+    skyFolder.add(settings, 'skyRayleigh', 0.0, 4.0, 0.05)
+        .name('Rayleigh')
+        .onChange((value) => {
+            sky.material.uniforms['rayleigh'].value = value;
+        });
 
     gui.close();
 }
