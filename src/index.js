@@ -27,7 +27,8 @@ import birdFragmentShader from './shaders/birdFragment.glsl?raw';
  * - numero di specie modificabile dalla GUI;
  * - colori diversi per specie;
  * - coesione solo tra boids della stessa specie;
- * - cielo procedurale (modello di Preetham) al posto dello sfondo bianco.
+ * - cielo procedurale al posto dello sfondo bianco;
+ * - torre procedurale con evitamento ostacoli.
  */
 
 const BOUNDS = 800;
@@ -42,7 +43,11 @@ const settings = {
     skyElevation: 8,
     skyAzimuth: 180,
     skyTurbidity: 6,
-    skyRayleigh: 2
+    skyRayleigh: 2,
+    obstacleX: 300,
+    obstacleZ: 0,
+    obstacleHeight: 300,
+    obstacleRadius: 40
 };
 
 let container;
@@ -66,6 +71,9 @@ let birdMesh;
 
 let sky;
 const sun = new THREE.Vector3();
+let sunLight;
+
+let obstacleMesh;
 
 init();
 
@@ -101,9 +109,30 @@ function init() {
 
     window.addEventListener('resize', onWindowResize);
 
+    initLights();
     initSky();
+    initObstacle();
     initGui();
     rebuildSimulation();
+}
+
+function initLights() {
+    /*
+     * Finora la scena non aveva nessuna luce: le farfalle usano uno
+     * shader "unlit" (il colore è passato direttamente come vertex
+     * color), quindi non ne avevano bisogno. La torre, invece, usa un
+     * MeshStandardMaterial realistico e senza luci risulterebbe nera.
+     *
+     * sunLight (direzionale) simula il sole e viene tenuta sincronizzata
+     * con la posizione del sole del cielo procedurale in updateSun().
+     * hemiLight aggiunge un riempimento morbido (cielo sopra, terreno
+     * sotto) per evitare ombre completamente nere.
+     */
+    sunLight = new THREE.DirectionalLight(0xffffff, 3.0);
+    scene.add(sunLight);
+
+    const hemiLight = new THREE.HemisphereLight(0xddeeff, 0x2b2b2b, 0.6);
+    scene.add(hemiLight);
 }
 
 function initSky() {
@@ -135,6 +164,88 @@ function updateSun() {
     sun.setFromSphericalCoords(1, phi, theta);
 
     sky.material.uniforms['sunPosition'].value.copy(sun);
+
+    if (sunLight) {
+        sunLight.position.copy(sun).multiplyScalar(2000);
+    }
+}
+
+function initObstacle() {
+    /*
+     * Torre procedurale: nessun modello esterno, solo primitive di
+     * Three.js. Un cilindro (corpo, pietra grigia) sormontato da un
+     * cono (tetto, marrone), unità (raggio=1, altezza=1) e poi scalati
+     * in updateObstacle() secondo i parametri della GUI.
+     *
+     * Sia il cilindro che il cono di Three.js sono centrati verticalmente
+     * (da -0.5 a +0.5 in y locale): per posizionarli correttamente con
+     * base a y=0, li spostiamo di metà della loro altezza scalata.
+     */
+    obstacleMesh = new THREE.Group();
+
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: 0x8a8378,
+        roughness: 0.85,
+        metalness: 0.05
+    });
+
+    const roofMaterial = new THREE.MeshStandardMaterial({
+        color: 0x6b3f2a,
+        roughness: 0.7,
+        metalness: 0.05
+    });
+
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 16), bodyMaterial);
+    body.name = 'towerBody';
+
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 16), roofMaterial);
+    roof.name = 'towerRoof';
+
+    obstacleMesh.add(body);
+    obstacleMesh.add(roof);
+
+    scene.add(obstacleMesh);
+
+    updateObstacle();
+}
+
+function updateObstacle() {
+    const { obstacleX, obstacleZ, obstacleHeight, obstacleRadius } = settings;
+
+    const body = obstacleMesh.getObjectByName('towerBody');
+    const roof = obstacleMesh.getObjectByName('towerRoof');
+
+    body.scale.set(obstacleRadius, obstacleHeight, obstacleRadius);
+    body.position.set(0, obstacleHeight / 2, 0);
+
+    /*
+     * Il tetto è proporzionato al raggio della torre (non all'altezza),
+     * così resta visivamente coerente anche con torri molto alte o
+     * molto basse. Viene posizionato appena sopra la cima del cilindro.
+     */
+    const roofRadius = obstacleRadius * 1.15;
+    const roofHeight = obstacleRadius * 1.4;
+
+    roof.scale.set(roofRadius, roofHeight, roofRadius);
+    roof.position.set(0, obstacleHeight + roofHeight / 2, 0);
+
+    obstacleMesh.position.set(obstacleX, 0, obstacleZ);
+
+    /*
+     * Sincronizza le uniform dello shader di velocità con la torre
+     * visibile, così l'evitamento ostacoli corrisponde esattamente a
+     * ciò che si vede in scena (usiamo solo il corpo cilindrico come
+     * volume di collisione, il tetto resta puramente decorativo, ma il
+     * margine di sicurezza nello shader lo copre comunque).
+     */
+    if (simulation) {
+        simulation.setObstacle({
+            x: obstacleX,
+            z: obstacleZ,
+            height: obstacleHeight,
+            radius: obstacleRadius
+        });
+    }
 }
 
 function initGui() {
@@ -205,6 +316,29 @@ function initGui() {
             sky.material.uniforms['rayleigh'].value = value;
         });
 
+    /*
+     * Parametri dell'ostacolo (torre).
+     * Aggiornano sia la mesh visibile che le uniform di collisione dello
+     * shader di velocità, tramite updateObstacle().
+     */
+    const obstacleFolder = gui.addFolder('Obstacle (Tower)');
+
+    obstacleFolder.add(settings, 'obstacleX', -BOUNDS, BOUNDS, 5)
+        .name('Position X')
+        .onChange(updateObstacle);
+
+    obstacleFolder.add(settings, 'obstacleZ', -BOUNDS, BOUNDS, 5)
+        .name('Position Z')
+        .onChange(updateObstacle);
+
+    obstacleFolder.add(settings, 'obstacleHeight', 50, 700, 5)
+        .name('Height')
+        .onChange(updateObstacle);
+
+    obstacleFolder.add(settings, 'obstacleRadius', 10, 150, 1)
+        .name('Radius')
+        .onChange(updateObstacle);
+
     gui.close();
 }
 
@@ -246,6 +380,7 @@ function rebuildSimulation() {
 
     initBirds();
     updateSimulationParameters();
+    updateObstacle();
 }
 
 function updateSimulationParameters() {

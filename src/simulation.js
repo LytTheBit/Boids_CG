@@ -94,6 +94,16 @@ export class BoidsSimulation {
         this.velocityUniforms.predator = { value: new THREE.Vector3() };
 
         /*
+         * Ostacolo (torre): rappresentato come una "capsula" verticale
+         * (segmento da obstaclePosition a obstaclePosition + altezza,
+         * con raggio obstacleRadius). obstaclePosition è la base della
+         * torre (y = 0 locale della torre, non necessariamente 0 assoluto).
+         */
+        this.velocityUniforms.obstaclePosition = { value: new THREE.Vector3(300, 0, 0) };
+        this.velocityUniforms.obstacleHeight = { value: 300.0 };
+        this.velocityUniforms.obstacleRadius = { value: 40.0 };
+
+        /*
          * Nuove uniform:
          * - boidCount serve a ignorare eventuali pixel non usati;
          * - speciesCount serve a calcolare la specie di ogni boid nello shader.
@@ -160,6 +170,12 @@ export class BoidsSimulation {
         this.velocityUniforms.alignmentDistance.value = alignment;
         this.velocityUniforms.cohesionDistance.value = cohesion;
         this.velocityUniforms.centerPull.value = centered;
+    }
+
+    setObstacle({ x, z, height, radius }) {
+        this.velocityUniforms.obstaclePosition.value.set(x, 0, z);
+        this.velocityUniforms.obstacleHeight.value = height;
+        this.velocityUniforms.obstacleRadius.value = radius;
     }
 
     update(time, delta, predator) {
