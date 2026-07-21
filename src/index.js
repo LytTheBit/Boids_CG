@@ -47,7 +47,8 @@ const settings = {
     obstacleX: 300,
     obstacleZ: 0,
     obstacleHeight: 300,
-    obstacleRadius: 40
+    obstacleRadius: 40,
+    obstacleUndergroundDepth: 500
 };
 
 let container;
@@ -210,13 +211,13 @@ function initObstacle() {
 }
 
 function updateObstacle() {
-    const { obstacleX, obstacleZ, obstacleHeight, obstacleRadius } = settings;
+    const { obstacleX, obstacleZ, obstacleHeight, obstacleRadius, obstacleUndergroundDepth } = settings;
 
     const body = obstacleMesh.getObjectByName('towerBody');
     const roof = obstacleMesh.getObjectByName('towerRoof');
-
-    body.scale.set(obstacleRadius, obstacleHeight, obstacleRadius);
-    body.position.set(0, obstacleHeight / 2, 0);
+    const totalHeight = obstacleHeight + obstacleUndergroundDepth;
+    body.scale.set(obstacleRadius, totalHeight, obstacleRadius);
+    body.position.set(0, (obstacleHeight - obstacleUndergroundDepth) / 2, 0);
 
     /*
      * Il tetto è proporzionato al raggio della torre (non all'altezza),
@@ -229,7 +230,7 @@ function updateObstacle() {
     roof.scale.set(roofRadius, roofHeight, roofRadius);
     roof.position.set(0, obstacleHeight + roofHeight / 2, 0);
 
-    obstacleMesh.position.set(obstacleX, 0, obstacleZ);
+    obstacleMesh.position.set(obstacleX, -250, obstacleZ);
 
     /*
      * Sincronizza le uniform dello shader di velocità con la torre
@@ -337,6 +338,10 @@ function initGui() {
 
     obstacleFolder.add(settings, 'obstacleRadius', 10, 150, 1)
         .name('Radius')
+        .onChange(updateObstacle);
+
+    obstacleFolder.add(settings, 'obstacleUndergroundDepth', 0, 1500, 10)
+        .name('Underground Depth')
         .onChange(updateObstacle);
 
     gui.close();
