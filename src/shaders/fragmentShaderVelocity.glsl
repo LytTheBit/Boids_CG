@@ -9,6 +9,10 @@
  * - Separation: applicata tra tutti i boids.
  * - Alignment: applicata tra tutti i boids.
  * - Cohesion: applicata solo tra boids della stessa specie.
+ * - Long-range cohesion: richiamo debole verso la propria specie,
+ *   attivo anche oltre la zona di interazione locale, per evitare
+ *   che i boid isolati restino "persi" senza più forze che li
+ *   riportino nello stormo.
  *
  * Le specie sono calcolate a partire dall'indice del boid:
  *
@@ -43,6 +47,19 @@ float zoneRadiusSquared = 1600.0;
 float separationThresh = 0.45;
 float alignmentThresh = 0.65;
 
+/*
+ * Raggio della coesione a lungo raggio: multiplo della zoneRadius normale.
+ * Puoi alzare questo moltiplicatore (es. 5.0) se vuoi che i boid isolati
+ * vengano "recuperati" anche da molto lontano.
+ */
+const float LONG_RANGE_MULT = 3.5;
+
+/*
+ * Intensità della coesione a lungo raggio. Deve restare bassa rispetto
+ * alla cohesion normale, altrimenti domina anche a corto raggio.
+ */
+const float LONG_RANGE_STRENGTH = 0.6;
+
 const float UPPER_BOUNDS = BOUNDS;
 const float LOWER_BOUNDS = -UPPER_BOUNDS;
 
@@ -67,6 +84,9 @@ void main() {
     separationThresh = separationDistance / zoneRadius;
     alignmentThresh = (separationDistance + alignmentDistance) / zoneRadius;
     zoneRadiusSquared = zoneRadius * zoneRadius;
+
+    float longRangeRadius = zoneRadius * LONG_RANGE_MULT;
+    float longRangeRadiusSquared = longRangeRadius * longRangeRadius;
 
     vec2 uv = gl_FragCoord.xy / resolution.xy;
 
@@ -116,11 +136,10 @@ void main() {
 
     /*
      * Richiamo verso il centro della scena.
-     * La forza è controllabile dalla GUI (parametro "centered") e cresce
-     * gradualmente con la distanza dal centro (0 al centro, massima ai bordi):
-     * così i boid vicini al centro non vengono disturbati e le regole di
-     * flocking locali (separazione/allineamento/coesione) restano dominanti,
-     * mentre chi si allontana troppo verso i bordi viene richiamato indietro.
+     * Attivo solo quando il boid è già parecchio lontano dal centro
+     * (oltre il 50% del raggio massimo): così non interferisce con le
+     * dinamiche locali di flocking, ma fa comunque da "guardrail" per
+     * chi si allontana troppo verso i bordi.
      */
     vec3 central = vec3(0.0, 0.0, 0.0);
 
@@ -130,7 +149,7 @@ void main() {
     dir.y *= 2.5;
 
     if (dist > 0.0001) {
-        float pullStrength = centerPull * smoothstep(0.0, UPPER_BOUNDS, dist);
+        float pullStrength = centerPull * smoothstep(UPPER_BOUNDS * 0.5, UPPER_BOUNDS, dist);
         velocity -= normalize(dir) * delta * pullStrength;
     }
 
@@ -157,12 +176,26 @@ void main() {
 
             distSquared = dist * dist;
 
-            if (distSquared > zoneRadiusSquared) continue;
-
-            percent = distSquared / zoneRadiusSquared;
-
             float otherSpecies = getSpecies(otherIndex);
             bool sameSpecies = selfSpecies == otherSpecies;
+
+            /*
+             * Fuori dalla zona di interazione normale:
+             * per boid della stessa specie, applica comunque una debole
+             * coesione a lungo raggio, per evitare che restino isolati
+             * senza nessuna forza che li riporti nello stormo.
+             */
+            if (distSquared > zoneRadiusSquared) {
+                if (sameSpecies && distSquared < longRangeRadiusSquared) {
+                    float longPercent = (distSquared - zoneRadiusSquared)
+                        / (longRangeRadiusSquared - zoneRadiusSquared);
+                    f = (1.0 - longPercent) * delta * LONG_RANGE_STRENGTH;
+                    velocity += normalize(dir) * f;
+                }
+                continue;
+            }
+
+            percent = distSquared / zoneRadiusSquared;
 
             if (percent < separationThresh) {
 

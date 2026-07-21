@@ -58,10 +58,12 @@ export class BirdGeometry extends THREE.BufferGeometry {
         const vertices = new THREE.BufferAttribute(new Float32Array(points * 3), 3);
         const birdColors = new THREE.BufferAttribute(new Float32Array(points * 3), 3);
         const references = new THREE.BufferAttribute(new Float32Array(points * 2), 2);
+        const birdScales = new THREE.BufferAttribute(new Float32Array(points), 1);
 
         this.setAttribute('position', vertices);
         this.setAttribute('birdColor', birdColors);
         this.setAttribute('reference', references);
+        this.setAttribute('birdScale', birdScales);
 
         let vertexArrayIndex = 0;
 
@@ -119,6 +121,21 @@ export class BirdGeometry extends THREE.BufferGeometry {
             boidColors[i] = color;
         }
 
+        /*
+         * Scala individuale per ogni boid, per dare varietà di dimensioni
+         * senza toccare la simulazione (che resta indipendente dalla
+         * dimensione visiva, esattamente come per il colore).
+         *
+         * Distribuzione uniforme tra MIN_SCALE e MAX_SCALE.
+         */
+        const MIN_SCALE = 0.7;
+        const MAX_SCALE = 1.4;
+
+        const boidScales = new Array(boidCount);
+        for (let i = 0; i < boidCount; i++) {
+            boidScales[i] = MIN_SCALE + Math.random() * (MAX_SCALE - MIN_SCALE);
+        }
+
         for (let i = 0; i < boidCount; i++) {
             // Ala superiore sinistra (forewing): cardine, angolo, punta in avanti
             vertsPush(
@@ -169,6 +186,8 @@ export class BirdGeometry extends THREE.BufferGeometry {
 
             references.array[v * 2 + 0] = x;
             references.array[v * 2 + 1] = y;
+
+            birdScales.array[v] = boidScales[birdIndex];
         }
 
         this.scale(0.2, 0.2, 0.2);

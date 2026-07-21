@@ -16,6 +16,7 @@
 
 attribute vec2 reference;
 attribute vec3 birdColor;
+attribute float birdScale;
 
 uniform sampler2D texturePosition;
 uniform sampler2D textureVelocity;
@@ -32,16 +33,24 @@ void main() {
 
     vec3 velocity = normalize(texture2D(textureVelocity, reference).xyz);
 
-    vec3 newPosition = position;
+    /*
+     * Scala individuale del boid (dimensione farfalla), applicata subito
+     * sulla geometria locale prima di piegatura e rotazione: il cardine
+     * resta a (0,0,z) per costruzione, quindi scalare non lo sposta,
+     * cambia solo l'apertura alare.
+     */
+    vec3 scaledPosition = position * birdScale;
+    vec3 newPosition = scaledPosition;
 
     /*
      * Animazione delle ali: piegatura rigida lungo l'asse del corpo (x=0),
      * come chiudere/aprire un libro lungo la costola.
      *
      * Ogni vertice delle ali ruota attorno all'asse z (l'asse del corpo)
-     * in base alla propria distanza dal cardine (position.x). I vertici
-     * sul cardine hanno x=0 e quindi restano fermi per costruzione: non
-     * c'è nessuno spostamento "a mano" di vertici specifici.
+     * in base alla propria distanza dal cardine (scaledPosition.x). I
+     * vertici sul cardine hanno x=0 e quindi restano fermi per
+     * costruzione: non c'è nessuno spostamento "a mano" di vertici
+     * specifici.
      *
      * foldAngle oscilla tra 0 (ali completamente aperte, piatte) e
      * maxFoldAngle (ali quasi chiuse verso l'alto): usiamo
@@ -49,12 +58,12 @@ void main() {
      * farfalla si piegano sempre nella stessa direzione (verso l'alto),
      * non specularmente sopra e sotto il corpo.
      *
-     * Usiamo abs(position.x) per l'altezza (newPosition.y) così le ali
-     * sinistra e destra si piegano nella STESSA direzione (verso l'alto),
-     * come un libro che si chiude, invece di ruotare una in avanti e
-     * l'altra all'indietro. La coordinata z non viene mai toccata: ogni
-     * punto resta esattamente alla sua profondità lungo il corpo, cioè
-     * "in posizione" lungo la linea di piega.
+     * Usiamo abs(scaledPosition.x) per l'altezza (newPosition.y) così le
+     * ali sinistra e destra si piegano nella STESSA direzione (verso
+     * l'alto), come un libro che si chiude, invece di ruotare una in
+     * avanti e l'altra all'indietro. La coordinata z non viene mai
+     * toccata: ogni punto resta esattamente alla sua profondità lungo il
+     * corpo, cioè "in posizione" lungo la linea di piega.
      */
     float maxFoldAngle = radians(75.0);
     float foldAngle = maxFoldAngle * (0.5 + 0.5 * sin(tmpPos.w));
@@ -62,8 +71,8 @@ void main() {
     float foldSin = sin(foldAngle);
     float foldCos = cos(foldAngle);
 
-    newPosition.y = abs(position.x) * foldSin;
-    newPosition.x = position.x * foldCos;
+    newPosition.y = abs(scaledPosition.x) * foldSin;
+    newPosition.x = scaledPosition.x * foldCos;
 
     newPosition = mat3(modelMatrix) * newPosition;
 
