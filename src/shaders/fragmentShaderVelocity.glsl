@@ -24,7 +24,6 @@ uniform float delta;
 uniform float separationDistance;
 uniform float alignmentDistance;
 uniform float cohesionDistance;
-uniform float freedomFactor;
 uniform float centerPull;
 
 uniform vec3 predator;
@@ -117,9 +116,11 @@ void main() {
 
     /*
      * Richiamo verso il centro della scena.
-     * La forza è controllabile dalla GUI (parametro "centered"): più alta,
-     * più spesso i boids vengono spinti a restare vicino al centro invece
-     * di allontanarsi verso i bordi della scena.
+     * La forza è controllabile dalla GUI (parametro "centered") e cresce
+     * gradualmente con la distanza dal centro (0 al centro, massima ai bordi):
+     * così i boid vicini al centro non vengono disturbati e le regole di
+     * flocking locali (separazione/allineamento/coesione) restano dominanti,
+     * mentre chi si allontana troppo verso i bordi viene richiamato indietro.
      */
     vec3 central = vec3(0.0, 0.0, 0.0);
 
@@ -129,7 +130,8 @@ void main() {
     dir.y *= 2.5;
 
     if (dist > 0.0001) {
-        velocity -= normalize(dir) * delta * centerPull;
+        float pullStrength = centerPull * smoothstep(0.0, UPPER_BOUNDS, dist);
+        velocity -= normalize(dir) * delta * pullStrength;
     }
 
     /*

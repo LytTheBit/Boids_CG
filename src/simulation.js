@@ -89,7 +89,6 @@ export class BoidsSimulation {
         this.velocityUniforms.separationDistance = { value: 1.0 };
         this.velocityUniforms.alignmentDistance = { value: 1.0 };
         this.velocityUniforms.cohesionDistance = { value: 1.0 };
-        this.velocityUniforms.freedomFactor = { value: 1.0 };
         this.velocityUniforms.centerPull = { value: 5.0 }; // valore di default = comportamento precedente
 
         this.velocityUniforms.predator = { value: new THREE.Vector3() };
@@ -156,11 +155,10 @@ export class BoidsSimulation {
         }
     }
 
-    setBoidsParameters({ separation, alignment, cohesion, freedom, centered }) {
+    setBoidsParameters({ separation, alignment, cohesion, centered }) {
         this.velocityUniforms.separationDistance.value = separation;
         this.velocityUniforms.alignmentDistance.value = alignment;
         this.velocityUniforms.cohesionDistance.value = cohesion;
-        this.velocityUniforms.freedomFactor.value = freedom;
         this.velocityUniforms.centerPull.value = centered;
     }
 

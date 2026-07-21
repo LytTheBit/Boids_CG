@@ -36,7 +36,6 @@ const settings = {
     separation: 20.0,
     alignment: 20.0,
     cohesion: 20.0,
-    freedom: 0.75,
     centered: 5.0 // valore di default = comportamento precedente (era fisso nello shader)
 };
 
@@ -133,10 +132,6 @@ function initGui() {
         .name('Cohesion')
         .onChange(updateSimulationParameters);
 
-    gui.add(settings, 'freedom', 0.0, 1.0, 0.01)
-        .name('Freedom')
-        .onChange(updateSimulationParameters);
-
     gui.add(settings, 'centered', 0.0, 20.0, 0.5)
         .name('Centered')
         .onChange(updateSimulationParameters);
@@ -191,7 +186,6 @@ function updateSimulationParameters() {
         separation: settings.separation,
         alignment: settings.alignment,
         cohesion: settings.cohesion,
-        freedom: settings.freedom,
         centered: settings.centered
     });
 }
