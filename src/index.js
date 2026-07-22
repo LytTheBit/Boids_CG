@@ -14,24 +14,44 @@ import birdFragmentShader from './shaders/birdFragment.glsl?raw';
 /*
  * index.js
  *
- * File principale dell'applicazione.
+ * Main application file.
  *
- * Responsabilità:
- * - crea scena, camera e renderer Three.js;
- * - crea la simulazione GPGPU;
- * - crea la geometria dei boids;
- * - gestisce GUI, resize, mouse e animation loop.
+ * Responsibilities:
+ * - creates the Three.js scene, camera and renderer;
+ * - creates the GPGPU simulation;
+ * - creates the bird (boid) geometry;
+ * - manages the GUI, resize, mouse input and animation loop.
  *
- * Migliorie aggiunte:
- * - numero di boids modificabile dalla GUI;
- * - numero di specie modificabile dalla GUI;
- * - colori diversi per specie;
- * - coesione solo tra boids della stessa specie;
- * - cielo procedurale al posto dello sfondo bianco;
- * - più torri procedurali con evitamento ostacoli.
+ * Features:
+ * - boid count adjustable from the GUI;
+ * - species count adjustable from the GUI;
+ * - different colors per species;
+ * - cohesion only between boids of the same species;
+ * - procedural sky instead of a flat white background;
+ * - a configurable number of procedural towers with obstacle avoidance.
  */
 
 const BOUNDS = 800;
+
+/*
+ * Minimum horizontal distance a tower must keep from the camera.
+ * Without this, a tower could end up positioned right where the camera
+ * sits, effectively placing the camera inside the solid tower geometry
+ * (the screen would just show a flat, close-up color).
+ */
+const MIN_TOWER_CAMERA_DISTANCE = 100;
+
+/*
+ * The vertical portion of each tower that extends below y = 0 (the
+ * conceptual "ground" level used by the collision uniforms). This is
+ * fixed at its maximum useful value rather than user-configurable: the
+ * whole point is that the tower base should never be visible, no matter
+ * the camera angle, so there is no legitimate reason to ever lower it.
+ */
+const OBSTACLE_UNDERGROUND_DEPTH = 1500;
+
+const MIN_TOWER_COUNT = 1;
+const MAX_TOWER_COUNT = 5;
 
 const settings = {
     boids: 1024,
@@ -39,15 +59,16 @@ const settings = {
     separation: 20.0,
     alignment: 20.0,
     cohesion: 20.0,
-    centered: 5.0, // valore di default = comportamento precedente (era fisso nello shader)
+    centered: 5.0, // default value = previous behaviour (was hardcoded in the shader)
     skyElevation: 8,
     skyAzimuth: 180,
     skyTurbidity: 6,
     skyRayleigh: 2,
+    towerCount: 3,
     obstacles: [
-        { x: 300, z: 0, height: 300, radius: 40, undergroundDepth: 500 },
-        { x: -280, z: 220, height: 220, radius: 35, undergroundDepth: 500 },
-        { x: 0, z: -350, height: 260, radius: 45, undergroundDepth: 500 }
+        { x: 300, z: 0, height: 300, radius: 40 },
+        { x: -280, z: 220, height: 220, radius: 35 },
+        { x: 0, z: -350, height: 260, radius: 45 }
     ]
 };
 
@@ -76,6 +97,19 @@ let sunLight;
 
 let obstacleMeshes = [];
 
+/*
+ * Reference to the GUI folder containing all per-tower subfolders, and
+ * one { xController, zController } pair per tower, kept in sync with
+ * settings.obstacles by index. Needed so that when a tower's position is
+ * clamped away from the camera (see clampObstacleDistanceFromCamera),
+ * the displayed slider value can be refreshed to match the clamped one.
+ */
+let obstaclesFolder = null;
+let towerControllers = [];
+
+let towerBodyTexture = null;
+let towerRoofTexture = null;
+
 init();
 
 function init() {
@@ -91,7 +125,14 @@ function init() {
     camera.position.z = 350;
 
     scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0xd6e6f5, 200, 1600);
+
+    /*
+     * Fog range widened a bit compared to the initial version: towers
+     * placed further back (e.g. around z = -350) were fading almost
+     * completely white well before reaching the edge of the visible
+     * area. This keeps that same soft atmospheric fade, just further out.
+     */
+    scene.fog = new THREE.Fog(0xd6e6f5, 200, 2600);
 
     renderer = new THREE.WebGLRenderer();
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -119,15 +160,15 @@ function init() {
 
 function initLights() {
     /*
-     * Finora la scena non aveva nessuna luce: le farfalle usano uno
-     * shader "unlit" (il colore è passato direttamente come vertex
-     * color), quindi non ne avevano bisogno. Le torri, invece, usano un
-     * MeshStandardMaterial realistico e senza luci risulterebbero nere.
+     * The scene previously had no lights at all: the birds use an unlit
+     * shader (color is passed directly as a vertex color), so they never
+     * needed any. The towers, however, use a realistic
+     * MeshStandardMaterial and would render pitch black without lights.
      *
-     * sunLight (direzionale) simula il sole e viene tenuta sincronizzata
-     * con la posizione del sole del cielo procedurale in updateSun().
-     * hemiLight aggiunge un riempimento morbido (cielo sopra, terreno
-     * sotto) per evitare ombre completamente nere.
+     * sunLight (directional) simulates the sun and is kept in sync with
+     * the procedural sky's sun position in updateSun(). hemiLight adds a
+     * soft fill (sky color from above, ground color from below) so
+     * shadowed areas are not fully black.
      */
     sunLight = new THREE.DirectionalLight(0xffffff, 3.0);
     scene.add(sunLight);
@@ -138,12 +179,12 @@ function initLights() {
 
 function initSky() {
     /*
-     * Cielo procedurale (modello di Preetham), sostituisce lo sfondo
-     * bianco piatto. È una "cupola" enorme (BoxGeometry con BackSide)
-     * centrata sulla camera concettualmente all'infinito: la scaliamo
-     * molto più grande della scena dei boid (BOUNDS = 800) e ben dentro
-     * il far plane della camera (20000), così resta sempre visibile
-     * dietro tutto il resto senza clipping.
+     * Procedural sky (Preetham model), replacing the flat white
+     * background. It's a huge "dome" (a box geometry rendered with
+     * BackSide) conceptually centered on the camera at infinity: we
+     * scale it far larger than the boid scene (BOUNDS = 800) and safely
+     * within the camera's far plane (20000), so it always stays visible
+     * behind everything else without clipping.
      */
     sky = new Sky();
     sky.scale.setScalar(10000);
@@ -171,30 +212,214 @@ function updateSun() {
     }
 }
 
+/*
+ * Procedural brick texture (canvas-based), used both as a color map and
+ * as a bump map: no external image files are involved. The mortar lines
+ * (drawn darker) read as recessed grooves once combined with the
+ * scene's lighting through the bump map, giving the tower body some real
+ * surface depth instead of a flat, uniform cylinder.
+ *
+ * Lazily created once and shared by every tower's body material.
+ */
+function getTowerBodyTexture() {
+    if (towerBodyTexture) return towerBodyTexture;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#9c9285';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#55493f';
+
+    const brickWidth = 64;
+    const brickHeight = 32;
+    const mortarThickness = 5;
+
+    for (let y = 0; y < canvas.height; y += brickHeight) {
+        // Horizontal mortar line.
+        ctx.fillRect(0, y, canvas.width, mortarThickness);
+
+        // Vertical mortar lines, offset every other row for a running
+        // bond brick pattern.
+        const rowIndex = Math.floor(y / brickHeight);
+        const rowOffset = (rowIndex % 2 === 0) ? 0 : brickWidth / 2;
+
+        for (let x = -brickWidth; x < canvas.width + brickWidth; x += brickWidth) {
+            ctx.fillRect(x + rowOffset, y, mortarThickness, brickHeight);
+        }
+    }
+
+    towerBodyTexture = new THREE.CanvasTexture(canvas);
+    towerBodyTexture.wrapS = THREE.RepeatWrapping;
+    towerBodyTexture.wrapT = THREE.RepeatWrapping;
+    towerBodyTexture.repeat.set(4, 8);
+
+    return towerBodyTexture;
+}
+
+/*
+ * Procedural shingle-like texture for the conical roof, same idea as the
+ * brick texture above: darker grooves read as recessed once lit.
+ */
+function getTowerRoofTexture() {
+    if (towerRoofTexture) return towerRoofTexture;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#7a4a32';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = '#4a2c1c';
+    ctx.lineWidth = 4;
+
+    const rowHeight = 24;
+
+    for (let y = 0; y < canvas.height; y += rowHeight) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+    }
+
+    for (let x = 0; x < canvas.width; x += 20) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+    }
+
+    towerRoofTexture = new THREE.CanvasTexture(canvas);
+    towerRoofTexture.wrapS = THREE.RepeatWrapping;
+    towerRoofTexture.wrapT = THREE.RepeatWrapping;
+    towerRoofTexture.repeat.set(6, 3);
+
+    return towerRoofTexture;
+}
+
+/*
+ * Keeps a tower at least MIN_TOWER_CAMERA_DISTANCE away from the camera
+ * (measured on the horizontal x/z plane, since the camera never moves
+ * vertically). Mutates the given obstacle in place.
+ */
+function clampObstacleDistanceFromCamera(obstacle) {
+    const dx = obstacle.x - camera.position.x;
+    const dz = obstacle.z - camera.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+
+    if (dist >= MIN_TOWER_CAMERA_DISTANCE) return;
+
+    if (dist < 0.0001) {
+        // Degenerate case: the tower sits exactly at the camera's
+        // position. Push it away along a fixed default direction to
+        // avoid normalizing a zero-length vector.
+        obstacle.x = camera.position.x + MIN_TOWER_CAMERA_DISTANCE;
+        obstacle.z = camera.position.z;
+        return;
+    }
+
+    const scale = MIN_TOWER_CAMERA_DISTANCE / dist;
+    obstacle.x = camera.position.x + dx * scale;
+    obstacle.z = camera.position.z + dz * scale;
+}
+
+/*
+ * Default configuration for a newly added tower (when the user raises
+ * Tower Count). Spreads towers evenly around a circle so they don't
+ * all overlap by default.
+ */
+function createDefaultObstacle(index) {
+    const angle = (index / MAX_TOWER_COUNT) * Math.PI * 2;
+    const spreadRadius = 320;
+
+    const obstacle = {
+        x: Math.cos(angle) * spreadRadius,
+        z: Math.sin(angle) * spreadRadius,
+        height: 250,
+        radius: 40
+    };
+
+    clampObstacleDistanceFromCamera(obstacle);
+
+    return obstacle;
+}
+
+/*
+ * Grows or shrinks settings.obstacles to match the requested tower
+ * count, adding sensible defaults for new towers and simply truncating
+ * the array when reducing the count.
+ */
+function resizeObstacles(count) {
+    if (count > settings.obstacles.length) {
+        while (settings.obstacles.length < count) {
+            settings.obstacles.push(createDefaultObstacle(settings.obstacles.length));
+        }
+    } else {
+        settings.obstacles.length = count;
+    }
+}
+
+function disposeObstacleMeshes() {
+    obstacleMeshes.forEach((group) => {
+        scene.remove(group);
+
+        group.traverse((child) => {
+            if (child.geometry) {
+                child.geometry.dispose();
+            }
+
+            /*
+             * Materials are disposed, but the shared procedural textures
+             * (towerBodyTexture / towerRoofTexture) are intentionally
+             * left alive: they are created once and reused by every
+             * tower, including the ones about to be recreated right
+             * after this call.
+             */
+            if (child.material) {
+                child.material.dispose();
+            }
+        });
+    });
+
+    obstacleMeshes = [];
+}
+
 function initObstacles() {
     /*
-     * Torri procedurali: nessun modello esterno, solo primitive di
-     * Three.js. Una mesh (gruppo cilindro+cono) per ogni voce di
+     * Procedural towers: no external models, just Three.js primitives.
+     * One mesh (cylinder body + cone roof group) per entry in
      * settings.obstacles.
      *
-     * Sia il cilindro che il cono di Three.js sono centrati verticalmente
-     * (da -0.5 a +0.5 in y locale): per posizionarli correttamente li
-     * spostiamo di metà della loro altezza scalata, esattamente come
-     * nella versione a torre singola.
+     * Both the cylinder and the cone are vertically centered by Three.js
+     * (from -0.5 to +0.5 in local y): to position them correctly they
+     * are offset by half of their scaled height.
      */
     obstacleMeshes = settings.obstacles.map(() => {
         const group = new THREE.Group();
 
         const bodyMaterial = new THREE.MeshStandardMaterial({
-            color: 0x8a8378,
+            color: 0xffffff,
             roughness: 0.85,
-            metalness: 0.05
+            metalness: 0.05,
+            map: getTowerBodyTexture(),
+            bumpMap: getTowerBodyTexture(),
+            bumpScale: 1.5
         });
 
         const roofMaterial = new THREE.MeshStandardMaterial({
-            color: 0x6b3f2a,
+            color: 0xffffff,
             roughness: 0.7,
-            metalness: 0.05
+            metalness: 0.05,
+            map: getTowerRoofTexture(),
+            bumpMap: getTowerRoofTexture(),
+            bumpScale: 1.0
         });
 
         const body = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 16), bodyMaterial);
@@ -215,25 +440,28 @@ function initObstacles() {
 }
 
 function updateObstacles() {
+    settings.obstacles.forEach((obstacle) => {
+        clampObstacleDistanceFromCamera(obstacle);
+    });
+
     settings.obstacles.forEach((obstacle, index) => {
         const group = obstacleMeshes[index];
 
         if (!group) return;
 
-        const { x, z, height, radius, undergroundDepth } = obstacle;
+        const { x, z, height, radius } = obstacle;
 
         const body = group.getObjectByName('towerBody');
         const roof = group.getObjectByName('towerRoof');
 
-        const totalHeight = height + undergroundDepth;
+        const totalHeight = height + OBSTACLE_UNDERGROUND_DEPTH;
         body.scale.set(radius, totalHeight, radius);
-        body.position.set(0, (height - undergroundDepth) / 2, 0);
+        body.position.set(0, (height - OBSTACLE_UNDERGROUND_DEPTH) / 2, 0);
 
         /*
-         * Il tetto è proporzionato al raggio della torre (non
-         * all'altezza), così resta visivamente coerente anche con torri
-         * molto alte o molto basse. Viene posizionato appena sopra la
-         * cima del cilindro.
+         * The roof is sized relative to the tower's radius (not its
+         * height), so it stays visually consistent for both very tall
+         * and very short towers. It sits right on top of the cylinder.
          */
         const roofRadius = radius * 1.15;
         const roofHeight = radius * 1.4;
@@ -245,23 +473,71 @@ function updateObstacles() {
     });
 
     /*
-     * Sincronizza le uniform dello shader di velocità con le torri
-     * visibili, così l'evitamento ostacoli corrisponde esattamente a
-     * ciò che si vede in scena (usiamo solo il corpo cilindrico come
-     * volume di collisione, il tetto resta puramente decorativo, ma il
-     * margine di sicurezza nello shader lo copre comunque).
+     * Refresh the displayed GUI values for x/z, in case
+     * clampObstacleDistanceFromCamera changed them (otherwise the slider
+     * would show a stale value that no longer matches the actual tower
+     * position).
+     */
+    towerControllers.forEach(({ xController, zController }) => {
+        xController.updateDisplay();
+        zController.updateDisplay();
+    });
+
+    /*
+     * Sync the velocity shader's collision uniforms with the visible
+     * towers, so obstacle avoidance matches what's on screen exactly
+     * (only the cylindrical body counts as collision volume, the roof is
+     * purely decorative, though the avoidance safety margin covers it
+     * to some extent anyway).
      */
     if (simulation) {
         simulation.setObstacles(settings.obstacles);
     }
 }
 
+/*
+ * (Re)builds the "Obstacles (Towers)" GUI folder and its per-tower
+ * subfolders from the current settings.obstacles array. Called once at
+ * startup and again whenever Tower Count changes the number of towers.
+ */
+function buildObstaclesGui() {
+    if (obstaclesFolder) {
+        obstaclesFolder.destroy();
+    }
+
+    towerControllers = [];
+
+    obstaclesFolder = gui.addFolder('Obstacles (Towers)');
+
+    settings.obstacles.forEach((obstacle, index) => {
+        const towerFolder = obstaclesFolder.addFolder(`Tower ${index + 1}`);
+
+        const xController = towerFolder.add(obstacle, 'x', -BOUNDS, BOUNDS, 5)
+            .name('Position X')
+            .onChange(updateObstacles);
+
+        const zController = towerFolder.add(obstacle, 'z', -BOUNDS, BOUNDS, 5)
+            .name('Position Z')
+            .onChange(updateObstacles);
+
+        towerFolder.add(obstacle, 'height', 50, 700, 5)
+            .name('Height')
+            .onChange(updateObstacles);
+
+        towerFolder.add(obstacle, 'radius', 10, 150, 1)
+            .name('Radius')
+            .onChange(updateObstacles);
+
+        towerControllers.push({ xController, zController });
+    });
+}
+
 function initGui() {
     gui = new GUI();
 
     /*
-     * Parametri strutturali.
-     * Richiedono la ricostruzione della simulazione.
+     * Structural parameters.
+     * These require rebuilding the simulation.
      */
     gui.add(settings, 'boids', 100, 4096, 1)
         .name('Boids')
@@ -278,8 +554,8 @@ function initGui() {
         });
 
     /*
-     * Parametri comportamentali.
-     * Non richiedono ricostruzione: aggiornano solo le uniform.
+     * Behavioural parameters.
+     * These don't require a rebuild, they only update uniforms.
      */
     gui.add(settings, 'separation', 0.0, 100.0, 1.0)
         .name('Separation')
@@ -298,9 +574,9 @@ function initGui() {
         .onChange(updateSimulationParameters);
 
     /*
-     * Parametri del cielo.
-     * Non richiedono ricostruzione della simulazione, agiscono solo
-     * sulle uniform dello shader del cielo.
+     * Sky parameters.
+     * These don't require rebuilding the simulation, they only affect
+     * the sky shader's uniforms.
      */
     const skyFolder = gui.addFolder('Sky');
 
@@ -325,43 +601,36 @@ function initGui() {
         });
 
     /*
-     * Parametri delle torri.
-     * Una sottocartella per ogni torre presente in settings.obstacles.
-     * Tutte aggiornano sia le mesh visibili che le uniform di collisione
-     * dello shader di velocità, tramite updateObstacles().
+     * Tower count.
+     * Changing this resizes settings.obstacles, rebuilds the tower
+     * meshes and their GUI subfolders, and rebuilds the simulation
+     * (MAX_OBSTACLES is a compile-time shader define, so a new tower
+     * count needs a fresh BoidsSimulation instance).
      */
-    const obstaclesFolder = gui.addFolder('Obstacles (Towers)');
+    gui.add(settings, 'towerCount', MIN_TOWER_COUNT, MAX_TOWER_COUNT, 1)
+        .name('Tower Count')
+        .onFinishChange(() => {
+            settings.towerCount = Math.round(settings.towerCount);
 
-    settings.obstacles.forEach((obstacle, index) => {
-        const towerFolder = obstaclesFolder.addFolder(`Torre ${index + 1}`);
+            resizeObstacles(settings.towerCount);
+            disposeObstacleMeshes();
+            initObstacles();
+            buildObstaclesGui();
+            rebuildSimulation();
+        });
 
-        towerFolder.add(obstacle, 'x', -BOUNDS, BOUNDS, 5)
-            .name('Position X')
-            .onChange(updateObstacles);
-
-        towerFolder.add(obstacle, 'z', -BOUNDS, BOUNDS, 5)
-            .name('Position Z')
-            .onChange(updateObstacles);
-
-        towerFolder.add(obstacle, 'height', 50, 700, 5)
-            .name('Height')
-            .onChange(updateObstacles);
-
-        towerFolder.add(obstacle, 'radius', 10, 150, 1)
-            .name('Radius')
-            .onChange(updateObstacles);
-
-        towerFolder.add(obstacle, 'undergroundDepth', 0, 1500, 10)
-            .name('Underground Depth')
-            .onChange(updateObstacles);
-    });
+    /*
+     * Per-tower parameters.
+     * One subfolder per entry in settings.obstacles.
+     */
+    buildObstaclesGui();
 
     gui.close();
 }
 
 function rebuildSimulation() {
     /*
-     * Rimozione della vecchia mesh dalla scena.
+     * Remove the previous bird mesh from the scene.
      */
     if (birdMesh) {
         scene.remove(birdMesh);
@@ -378,7 +647,7 @@ function rebuildSimulation() {
     }
 
     /*
-     * Rimozione della vecchia simulazione GPGPU, se presente.
+     * Dispose of the previous GPGPU simulation, if any.
      */
     if (simulation) {
         simulation.dispose();
@@ -386,9 +655,9 @@ function rebuildSimulation() {
     }
 
     /*
-     * Ricostruzione della simulazione con i nuovi parametri.
-     * Il numero di torri (settings.obstacles.length) viene passato al
-     * costruttore perché diventa un define GLSL fisso (MAX_OBSTACLES).
+     * Rebuild the simulation with the current parameters.
+     * The tower count (settings.obstacles.length) is passed to the
+     * constructor because it becomes a fixed GLSL define (MAX_OBSTACLES).
      */
     simulation = new BoidsSimulation(
         renderer,
