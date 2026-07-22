@@ -28,7 +28,7 @@ import birdFragmentShader from './shaders/birdFragment.glsl?raw';
  * - colori diversi per specie;
  * - coesione solo tra boids della stessa specie;
  * - cielo procedurale al posto dello sfondo bianco;
- * - torre procedurale con evitamento ostacoli.
+ * - più torri procedurali con evitamento ostacoli.
  */
 
 const BOUNDS = 800;
@@ -44,11 +44,11 @@ const settings = {
     skyAzimuth: 180,
     skyTurbidity: 6,
     skyRayleigh: 2,
-    obstacleX: 300,
-    obstacleZ: 0,
-    obstacleHeight: 300,
-    obstacleRadius: 40,
-    obstacleUndergroundDepth: 500
+    obstacles: [
+        { x: 300, z: 0, height: 300, radius: 40, undergroundDepth: 500 },
+        { x: -280, z: 220, height: 220, radius: 35, undergroundDepth: 500 },
+        { x: 0, z: -350, height: 260, radius: 45, undergroundDepth: 500 }
+    ]
 };
 
 let container;
@@ -74,7 +74,7 @@ let sky;
 const sun = new THREE.Vector3();
 let sunLight;
 
-let obstacleMesh;
+let obstacleMeshes = [];
 
 init();
 
@@ -112,7 +112,7 @@ function init() {
 
     initLights();
     initSky();
-    initObstacle();
+    initObstacles();
     initGui();
     rebuildSimulation();
 }
@@ -121,8 +121,8 @@ function initLights() {
     /*
      * Finora la scena non aveva nessuna luce: le farfalle usano uno
      * shader "unlit" (il colore è passato direttamente come vertex
-     * color), quindi non ne avevano bisogno. La torre, invece, usa un
-     * MeshStandardMaterial realistico e senza luci risulterebbe nera.
+     * color), quindi non ne avevano bisogno. Le torri, invece, usano un
+     * MeshStandardMaterial realistico e senza luci risulterebbero nere.
      *
      * sunLight (direzionale) simula il sole e viene tenuta sincronizzata
      * con la posizione del sole del cielo procedurale in updateSun().
@@ -171,81 +171,88 @@ function updateSun() {
     }
 }
 
-function initObstacle() {
+function initObstacles() {
     /*
-     * Torre procedurale: nessun modello esterno, solo primitive di
-     * Three.js. Un cilindro (corpo, pietra grigia) sormontato da un
-     * cono (tetto, marrone), unità (raggio=1, altezza=1) e poi scalati
-     * in updateObstacle() secondo i parametri della GUI.
+     * Torri procedurali: nessun modello esterno, solo primitive di
+     * Three.js. Una mesh (gruppo cilindro+cono) per ogni voce di
+     * settings.obstacles.
      *
      * Sia il cilindro che il cono di Three.js sono centrati verticalmente
-     * (da -0.5 a +0.5 in y locale): per posizionarli correttamente con
-     * base a y=0, li spostiamo di metà della loro altezza scalata.
+     * (da -0.5 a +0.5 in y locale): per posizionarli correttamente li
+     * spostiamo di metà della loro altezza scalata, esattamente come
+     * nella versione a torre singola.
      */
-    obstacleMesh = new THREE.Group();
+    obstacleMeshes = settings.obstacles.map(() => {
+        const group = new THREE.Group();
 
-    const bodyMaterial = new THREE.MeshStandardMaterial({
-        color: 0x8a8378,
-        roughness: 0.85,
-        metalness: 0.05
+        const bodyMaterial = new THREE.MeshStandardMaterial({
+            color: 0x8a8378,
+            roughness: 0.85,
+            metalness: 0.05
+        });
+
+        const roofMaterial = new THREE.MeshStandardMaterial({
+            color: 0x6b3f2a,
+            roughness: 0.7,
+            metalness: 0.05
+        });
+
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 16), bodyMaterial);
+        body.name = 'towerBody';
+
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 16), roofMaterial);
+        roof.name = 'towerRoof';
+
+        group.add(body);
+        group.add(roof);
+
+        scene.add(group);
+
+        return group;
     });
 
-    const roofMaterial = new THREE.MeshStandardMaterial({
-        color: 0x6b3f2a,
-        roughness: 0.7,
-        metalness: 0.05
-    });
-
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 16), bodyMaterial);
-    body.name = 'towerBody';
-
-    const roof = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 16), roofMaterial);
-    roof.name = 'towerRoof';
-
-    obstacleMesh.add(body);
-    obstacleMesh.add(roof);
-
-    scene.add(obstacleMesh);
-
-    updateObstacle();
+    updateObstacles();
 }
 
-function updateObstacle() {
-    const { obstacleX, obstacleZ, obstacleHeight, obstacleRadius, obstacleUndergroundDepth } = settings;
+function updateObstacles() {
+    settings.obstacles.forEach((obstacle, index) => {
+        const group = obstacleMeshes[index];
 
-    const body = obstacleMesh.getObjectByName('towerBody');
-    const roof = obstacleMesh.getObjectByName('towerRoof');
-    const totalHeight = obstacleHeight + obstacleUndergroundDepth;
-    body.scale.set(obstacleRadius, totalHeight, obstacleRadius);
-    body.position.set(0, (obstacleHeight - obstacleUndergroundDepth) / 2, 0);
+        if (!group) return;
+
+        const { x, z, height, radius, undergroundDepth } = obstacle;
+
+        const body = group.getObjectByName('towerBody');
+        const roof = group.getObjectByName('towerRoof');
+
+        const totalHeight = height + undergroundDepth;
+        body.scale.set(radius, totalHeight, radius);
+        body.position.set(0, (height - undergroundDepth) / 2, 0);
+
+        /*
+         * Il tetto è proporzionato al raggio della torre (non
+         * all'altezza), così resta visivamente coerente anche con torri
+         * molto alte o molto basse. Viene posizionato appena sopra la
+         * cima del cilindro.
+         */
+        const roofRadius = radius * 1.15;
+        const roofHeight = radius * 1.4;
+
+        roof.scale.set(roofRadius, roofHeight, roofRadius);
+        roof.position.set(0, height + roofHeight / 2, 0);
+
+        group.position.set(x, -250, z);
+    });
 
     /*
-     * Il tetto è proporzionato al raggio della torre (non all'altezza),
-     * così resta visivamente coerente anche con torri molto alte o
-     * molto basse. Viene posizionato appena sopra la cima del cilindro.
-     */
-    const roofRadius = obstacleRadius * 1.15;
-    const roofHeight = obstacleRadius * 1.4;
-
-    roof.scale.set(roofRadius, roofHeight, roofRadius);
-    roof.position.set(0, obstacleHeight + roofHeight / 2, 0);
-
-    obstacleMesh.position.set(obstacleX, -250, obstacleZ);
-
-    /*
-     * Sincronizza le uniform dello shader di velocità con la torre
-     * visibile, così l'evitamento ostacoli corrisponde esattamente a
+     * Sincronizza le uniform dello shader di velocità con le torri
+     * visibili, così l'evitamento ostacoli corrisponde esattamente a
      * ciò che si vede in scena (usiamo solo il corpo cilindrico come
      * volume di collisione, il tetto resta puramente decorativo, ma il
      * margine di sicurezza nello shader lo copre comunque).
      */
     if (simulation) {
-        simulation.setObstacle({
-            x: obstacleX,
-            z: obstacleZ,
-            height: obstacleHeight,
-            radius: obstacleRadius
-        });
+        simulation.setObstacles(settings.obstacles);
     }
 }
 
@@ -318,31 +325,36 @@ function initGui() {
         });
 
     /*
-     * Parametri dell'ostacolo (torre).
-     * Aggiornano sia la mesh visibile che le uniform di collisione dello
-     * shader di velocità, tramite updateObstacle().
+     * Parametri delle torri.
+     * Una sottocartella per ogni torre presente in settings.obstacles.
+     * Tutte aggiornano sia le mesh visibili che le uniform di collisione
+     * dello shader di velocità, tramite updateObstacles().
      */
-    const obstacleFolder = gui.addFolder('Obstacle (Tower)');
+    const obstaclesFolder = gui.addFolder('Obstacles (Towers)');
 
-    obstacleFolder.add(settings, 'obstacleX', -BOUNDS, BOUNDS, 5)
-        .name('Position X')
-        .onChange(updateObstacle);
+    settings.obstacles.forEach((obstacle, index) => {
+        const towerFolder = obstaclesFolder.addFolder(`Torre ${index + 1}`);
 
-    obstacleFolder.add(settings, 'obstacleZ', -BOUNDS, BOUNDS, 5)
-        .name('Position Z')
-        .onChange(updateObstacle);
+        towerFolder.add(obstacle, 'x', -BOUNDS, BOUNDS, 5)
+            .name('Position X')
+            .onChange(updateObstacles);
 
-    obstacleFolder.add(settings, 'obstacleHeight', 50, 700, 5)
-        .name('Height')
-        .onChange(updateObstacle);
+        towerFolder.add(obstacle, 'z', -BOUNDS, BOUNDS, 5)
+            .name('Position Z')
+            .onChange(updateObstacles);
 
-    obstacleFolder.add(settings, 'obstacleRadius', 10, 150, 1)
-        .name('Radius')
-        .onChange(updateObstacle);
+        towerFolder.add(obstacle, 'height', 50, 700, 5)
+            .name('Height')
+            .onChange(updateObstacles);
 
-    obstacleFolder.add(settings, 'obstacleUndergroundDepth', 0, 1500, 10)
-        .name('Underground Depth')
-        .onChange(updateObstacle);
+        towerFolder.add(obstacle, 'radius', 10, 150, 1)
+            .name('Radius')
+            .onChange(updateObstacles);
+
+        towerFolder.add(obstacle, 'undergroundDepth', 0, 1500, 10)
+            .name('Underground Depth')
+            .onChange(updateObstacles);
+    });
 
     gui.close();
 }
@@ -375,17 +387,20 @@ function rebuildSimulation() {
 
     /*
      * Ricostruzione della simulazione con i nuovi parametri.
+     * Il numero di torri (settings.obstacles.length) viene passato al
+     * costruttore perché diventa un define GLSL fisso (MAX_OBSTACLES).
      */
     simulation = new BoidsSimulation(
         renderer,
         settings.boids,
         settings.species,
-        BOUNDS
+        BOUNDS,
+        settings.obstacles.length
     );
 
     initBirds();
     updateSimulationParameters();
-    updateObstacle();
+    updateObstacles();
 }
 
 function updateSimulationParameters() {

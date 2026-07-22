@@ -28,9 +28,10 @@ uniform float centerPull;
 
 uniform vec3 predator;
 
-uniform vec3 obstaclePosition;
-uniform float obstacleHeight;
-uniform float obstacleRadius;
+uniform vec3 obstaclePositions[MAX_OBSTACLES];
+uniform float obstacleHeights[MAX_OBSTACLES];
+uniform float obstacleRadii[MAX_OBSTACLES];
+uniform float obstacleActiveCount;
 
 uniform float boidCount;
 uniform float speciesCount;
@@ -119,49 +120,56 @@ void main() {
     }
 
     /*
-     * Evitamento ostacoli (torre).
-     * La torre è trattata come una "capsula" verticale: un segmento da
-     * obstaclePosition (base) a obstaclePosition + (0, obstacleHeight, 0)
-     * (cima), circondato da un raggio obstacleRadius. Il punto più vicino
-     * sul segmento viene "clampato" agli estremi, quindi la zona di
-     * repulsione risulta arrotondata sopra e sotto la torre (come una
+     * Evitamento ostacoli (torri).
+     * Ogni torre è trattata come una "capsula" verticale: un segmento da
+     * obstaclePositions[i] (base) a obstaclePositions[i] + (0, altezza, 0)
+     * (cima), circondato da un raggio obstacleRadii[i]. Il punto più
+     * vicino sul segmento viene "clampato" agli estremi, quindi la zona
+     * di repulsione risulta arrotondata sopra e sotto la torre (come una
      * capsula), permettendo ai boid di sorvolarla o passarci sotto in
      * modo fluido, oltre che di aggirarla lateralmente.
+     *
+     * obstacleActiveCount può essere minore di MAX_OBSTACLES: le torri
+     * oltre quel numero vengono ignorate (slot dell'array non usati).
      */
-    vec3 obstacleBase = obstaclePosition;
-    vec3 obstacleTop = obstaclePosition + vec3(0.0, obstacleHeight, 0.0);
-    vec3 obstacleSegment = obstacleTop - obstacleBase;
+    for (int i = 0; i < MAX_OBSTACLES; i++) {
+        if (i >= int(obstacleActiveCount)) break;
 
-    float obstacleSegLenSq = dot(obstacleSegment, obstacleSegment);
-    float obstacleT = 0.0;
+        vec3 obstacleBase = obstaclePositions[i];
+        vec3 obstacleTop = obstacleBase + vec3(0.0, obstacleHeights[i], 0.0);
+        vec3 obstacleSegment = obstacleTop - obstacleBase;
 
-    if (obstacleSegLenSq > 0.0001) {
-        obstacleT = clamp(
-            dot(selfPosition - obstacleBase, obstacleSegment) / obstacleSegLenSq,
-            0.0, 1.0
-        );
-    }
+        float obstacleSegLenSq = dot(obstacleSegment, obstacleSegment);
+        float obstacleT = 0.0;
 
-    vec3 obstacleClosestPoint = obstacleBase + obstacleSegment * obstacleT;
-    vec3 obstacleDir = selfPosition - obstacleClosestPoint;
-    float obstacleDist = length(obstacleDir);
+        if (obstacleSegLenSq > 0.0001) {
+            obstacleT = clamp(
+                dot(selfPosition - obstacleBase, obstacleSegment) / obstacleSegLenSq,
+                0.0, 1.0
+            );
+        }
 
-    /*
-     * Margine di sicurezza oltre il raggio fisico della torre, così la
-     * repulsione inizia prima che i boid tocchino la superficie.
-     */
-    float obstacleAvoidRadius = obstacleRadius + 60.0;
+        vec3 obstacleClosestPoint = obstacleBase + obstacleSegment * obstacleT;
+        vec3 obstacleDir = selfPosition - obstacleClosestPoint;
+        float obstacleDist = length(obstacleDir);
 
-    if (obstacleDist < 0.0001) {
         /*
-         * Caso limite: un boid è (quasi) esattamente sull'asse della
-         * torre. Spingiamolo verso l'alto per farlo uscire in modo
-         * deterministico, evitando una normalize(0) indefinita.
+         * Margine di sicurezza oltre il raggio fisico della torre, così
+         * la repulsione inizia prima che i boid tocchino la superficie.
          */
-        velocity += vec3(0.0, 1.0, 0.0) * delta * 50.0;
-    } else if (obstacleDist < obstacleAvoidRadius) {
-        f = (obstacleAvoidRadius / obstacleDist - 1.0) * delta * 40.0;
-        velocity += normalize(obstacleDir) * f;
+        float obstacleAvoidRadius = obstacleRadii[i] + 60.0;
+
+        if (obstacleDist < 0.0001) {
+            /*
+             * Caso limite: un boid è (quasi) esattamente sull'asse della
+             * torre. Spingiamolo verso l'alto per farlo uscire in modo
+             * deterministico, evitando una normalize(0) indefinita.
+             */
+            velocity += vec3(0.0, 1.0, 0.0) * delta * 50.0;
+        } else if (obstacleDist < obstacleAvoidRadius) {
+            f = (obstacleAvoidRadius / obstacleDist - 1.0) * delta * 40.0;
+            velocity += normalize(obstacleDir) * f;
+        }
     }
 
     /*

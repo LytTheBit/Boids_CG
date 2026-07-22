@@ -22,12 +22,21 @@ import fragmentShaderVelocity from './shaders/fragmentShaderVelocity.glsl?raw';
  */
 
 export class BoidsSimulation {
-    constructor(renderer, boidCount, speciesCount, bounds) {
+    constructor(renderer, boidCount, speciesCount, bounds, obstacleCount = 1) {
         this.renderer = renderer;
         this.boidCount = boidCount;
         this.speciesCount = speciesCount;
         this.bounds = bounds;
         this.boundsHalf = bounds / 2;
+
+        /*
+         * Numero massimo di ostacoli supportati. Va fissato a "compile time"
+         * come define dello shader (esattamente come BOUNDS), perché GLSL
+         * richiede una dimensione costante per gli array di uniform.
+         * Se in futuro serve un numero variabile di torri, ricostruire la
+         * simulazione (rebuildSimulation) con il nuovo obstacleCount.
+         */
+        this.obstacleCount = Math.max(1, obstacleCount);
 
         this.textureWidth = Math.ceil(Math.sqrt(boidCount));
         this.textureSize = this.textureWidth * this.textureWidth;
@@ -94,14 +103,24 @@ export class BoidsSimulation {
         this.velocityUniforms.predator = { value: new THREE.Vector3() };
 
         /*
-         * Ostacolo (torre): rappresentato come una "capsula" verticale
-         * (segmento da obstaclePosition a obstaclePosition + altezza,
-         * con raggio obstacleRadius). obstaclePosition è la base della
-         * torre (y = 0 locale della torre, non necessariamente 0 assoluto).
+         * Ostacoli (torri): ognuno rappresentato come una "capsula"
+         * verticale (segmento da obstaclePositions[i] a
+         * obstaclePositions[i] + altezza, con raggio obstacleRadii[i]).
+         * obstaclePositions[i].y è la base della torre (y = 0 locale
+         * della torre, non necessariamente 0 assoluto).
+         *
+         * obstacleCount dice allo shader quanti elementi dell'array sono
+         * effettivamente attivi (può essere minore di MAX_OBSTACLES).
          */
-        this.velocityUniforms.obstaclePosition = { value: new THREE.Vector3(300, 0, 0) };
-        this.velocityUniforms.obstacleHeight = { value: 300.0 };
-        this.velocityUniforms.obstacleRadius = { value: 40.0 };
+        const obstaclePositions = [];
+        for (let i = 0; i < this.obstacleCount; i++) {
+            obstaclePositions.push(new THREE.Vector3());
+        }
+
+        this.velocityUniforms.obstaclePositions = { value: obstaclePositions };
+        this.velocityUniforms.obstacleHeights = { value: new Array(this.obstacleCount).fill(0) };
+        this.velocityUniforms.obstacleRadii = { value: new Array(this.obstacleCount).fill(0) };
+        this.velocityUniforms.obstacleActiveCount = { value: 0 };
 
         /*
          * Nuove uniform:
@@ -112,6 +131,7 @@ export class BoidsSimulation {
         this.velocityUniforms.speciesCount = { value: this.speciesCount };
 
         this.velocityVariable.material.defines.BOUNDS = this.bounds.toFixed(2);
+        this.velocityVariable.material.defines.MAX_OBSTACLES = this.obstacleCount.toFixed(0);
 
         this.velocityVariable.wrapS = THREE.RepeatWrapping;
         this.velocityVariable.wrapT = THREE.RepeatWrapping;
@@ -172,10 +192,30 @@ export class BoidsSimulation {
         this.velocityUniforms.centerPull.value = centered;
     }
 
-    setObstacle({ x, z, height, radius }) {
-        this.velocityUniforms.obstaclePosition.value.set(x, 0, z);
-        this.velocityUniforms.obstacleHeight.value = height;
-        this.velocityUniforms.obstacleRadius.value = radius;
+    /**
+     * @param {Array<{x: number, z: number, height: number, radius: number}>} obstacles
+     */
+    setObstacles(obstacles) {
+        const positions = this.velocityUniforms.obstaclePositions.value;
+        const heights = this.velocityUniforms.obstacleHeights.value;
+        const radii = this.velocityUniforms.obstacleRadii.value;
+
+        /*
+         * Non superiamo mai MAX_OBSTACLES (this.obstacleCount): se la GUI
+         * ne definisse di più, quelli in eccesso vengono semplicemente
+         * ignorati (andrebbe ricostruita la simulazione con un
+         * obstacleCount più alto per supportarli davvero).
+         */
+        const activeCount = Math.min(obstacles.length, this.obstacleCount);
+
+        for (let i = 0; i < activeCount; i++) {
+            const obstacle = obstacles[i];
+            positions[i].set(obstacle.x, 0, obstacle.z);
+            heights[i] = obstacle.height;
+            radii[i] = obstacle.radius;
+        }
+
+        this.velocityUniforms.obstacleActiveCount.value = activeCount;
     }
 
     update(time, delta, predator) {
